@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -73,6 +74,22 @@ func TestRoute_Contest_Promoted_Polish(t *testing.T) {
 	}
 	if got.Task == "写第 1 章候选稿" {
 		t.Fatal("润色 Task 不能与候选 Task 相同")
+	}
+}
+
+func TestRoute_Contest_PolishTaskCarriesNotes(t *testing.T) {
+	s := contestWritingState(1)
+	s.CandidatesReady = map[string]bool{"wuzei": true, "tudou": true}
+	s.HasVerdict = true
+	s.VerdictWinner = "wuzei"
+	s.IsPromoted = true
+	s.VerdictRevisionNotes = "强化章末钩子"
+	got := Route(s)
+	if got == nil || !strings.Contains(got.Task, "强化章末钩子") {
+		t.Fatalf("润色 task 应携带 revision_notes，got %+v", got)
+	}
+	if !strings.Contains(got.Task, "润色") {
+		t.Fatal("润色 task 必须仍含\"润色\"（StopGuard 依赖）")
 	}
 }
 

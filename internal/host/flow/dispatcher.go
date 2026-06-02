@@ -2,6 +2,7 @@ package flow
 
 import (
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -82,7 +83,7 @@ func (d *Dispatcher) Dispatch() {
 	}
 	// Writer 任务：在派发同一刻把章节标为进行中，UI 右侧大纲立即反映"▸ 进行中"，
 	// 不用等 plan_chapter 真正执行（plan_chapter 会再调一次 StartChapter，幂等）。
-	if inst.Agent == "writer" && inst.Chapter > 0 && d.store != nil {
+	if strings.HasPrefix(inst.Agent, "writer") && inst.Chapter > 0 && d.store != nil {
 		if err := d.store.Progress.StartChapter(inst.Chapter); err != nil {
 			slog.Warn("flow router pre-mark in-progress failed", "module", "host.flow", "chapter", inst.Chapter, "err", err)
 		}

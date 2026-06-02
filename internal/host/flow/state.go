@@ -70,6 +70,7 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 		s.HasVerdict = true
 		s.VerdictWinner = v.Winner
 		s.IsPromoted = v.Promoted
+		s.VerdictRevisionNotes = v.RevisionNotes
 	}
 	return s
 }
