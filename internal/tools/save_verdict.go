@@ -65,6 +65,9 @@ func (t *SaveVerdictTool) Execute(_ context.Context, args json.RawMessage) (json
 	if len(v.Scores) == 0 {
 		return nil, fmt.Errorf("scores must not be empty")
 	}
+	if strings.TrimSpace(v.RevisionNotes) == "" {
+		return nil, fmt.Errorf("revision_notes is required")
+	}
 
 	// winner 必须在 scores 中存在
 	inScores := false
@@ -76,6 +79,13 @@ func (t *SaveVerdictTool) Execute(_ context.Context, args json.RawMessage) (json
 	}
 	if !inScores {
 		return nil, fmt.Errorf("winner %q must appear in scores", v.Winner)
+	}
+
+	// score 范围校验：Judge 是 LLM，可能给出越界分
+	for _, s := range v.Scores {
+		if s.Score < 0 || s.Score > 10 {
+			return nil, fmt.Errorf("score for %q out of range [0,10]: %v", s.Persona, s.Score)
+		}
 	}
 
 	// 落盘时一律置为未提升状态；提升由 dispatcher 内联完成
