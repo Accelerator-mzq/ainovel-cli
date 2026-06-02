@@ -4,6 +4,7 @@ package persona
 import (
 	"context"
 	"fmt"
+	"strings"
 	"unicode"
 
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -28,6 +29,7 @@ func New(store *store.Store, gen StyleGenFunc) *Generator {
 // 缺失的逐个生成（失败用兜底文案），最后整体写回缓存。
 func (g *Generator) EnsurePersonas(ctx context.Context, authors []string) ([]domain.Persona, error) {
 	// 读取已有缓存，不存在则得到空 map
+	// 错误被忽略：personas.json 损坏时静默重建（重新生成比阻断流程更合适）
 	cached, _ := g.store.Contest.LoadPersonas()
 	if cached == nil {
 		cached = make(map[string]domain.Persona)
@@ -77,16 +79,23 @@ func slugFor(author string, index int) string {
 	if !ascii {
 		return fmt.Sprintf("persona%d", index+1)
 	}
+	// 非字母数字一律转连字符，折叠连续连字符并去除首尾，避免污染文件路径
 	out := make([]rune, 0, len(author))
+	prevHyphen := false
 	for _, r := range author {
-		switch {
-		case unicode.IsSpace(r):
-			out = append(out, '-')
-		default:
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			out = append(out, unicode.ToLower(r))
+			prevHyphen = false
+		} else if !prevHyphen {
+			out = append(out, '-')
+			prevHyphen = true
 		}
 	}
-	return string(out)
+	slug := strings.Trim(string(out), "-")
+	if slug == "" {
+		slug = fmt.Sprintf("persona%d", index+1) // 全特殊字符兜底
+	}
+	return slug
 }
 
 // Slugs 把作者名列表转为稳定 slug 列表（与 EnsurePersonas 一致）。

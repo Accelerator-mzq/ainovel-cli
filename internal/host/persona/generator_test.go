@@ -3,6 +3,7 @@ package persona
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -52,7 +53,7 @@ func TestGenerate_FallbackOnError(t *testing.T) {
 	}
 }
 
-func TestSlugs_StableAndUnique(t *testing.T) {
+func TestSlugs_ChineseAndASCII(t *testing.T) {
 	// 中文作者名 → personaN 序号；ASCII → 小写
 	got := Slugs([]string{"乌贼", "Brandon Sanderson"})
 	if got[0] != "persona1" {
@@ -60,5 +61,16 @@ func TestSlugs_StableAndUnique(t *testing.T) {
 	}
 	if got[1] != "brandon-sanderson" {
 		t.Fatalf("ASCII slug = %q, want brandon-sanderson", got[1])
+	}
+}
+
+func TestSlugs_FiltersPathUnsafeChars(t *testing.T) {
+	got := Slugs([]string{"J.R.R. Tolkien", "a/b\\c"})
+	for _, s := range got {
+		for _, bad := range []string{".", "/", "\\"} {
+			if strings.Contains(s, bad) {
+				t.Fatalf("slug %q 含路径不安全字符 %q", s, bad)
+			}
+		}
 	}
 }
