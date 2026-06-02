@@ -67,7 +67,8 @@ type State struct {
 //  9. 下一弧是骨架           → architect_long(expand_arc)
 //
 // 10. 卷末需决策下一卷       → architect_long(append_volume / complete_book)
-// 11. 其它                  → writer(写 next_chapter)
+// 11. 竞稿章（启用且 ContestChapter>0）→ routeContest 四步子状态机
+// 12. 其它                  → writer(写 next_chapter)
 func Route(s State) *Instruction {
 	p := s.Progress
 	if p == nil {
@@ -146,18 +147,10 @@ func Route(s State) *Instruction {
 		}
 	}
 
-	// 11. 多人格竞稿编排（仅在正常续写语义下；重写/审阅/弧末已在上面拦截返回）
+	// 11. 多人格竞稿编排：竞稿章的下一步由子状态机权威决定
+	//（返回 nil 表示无指令可派——等 dispatcher 内联提升，或数据异常降级交 LLM 裁定）
 	if s.ContestEnabled && s.ContestChapter > 0 {
-		if inst := routeContest(s); inst != nil {
-			return inst
-		}
-		// routeContest 返回 nil 的两种情况：
-		//   a) verdict 已存在但未提升 —— 交 dispatcher 内联提升后重算，这里返回 nil
-		//   b) 本章竞稿已全部完成 —— 落到下面正常续写（NextChapter 已推进）
-		// 用 contestPending 区分：仍在竞稿中途则不要 fall through 到单 writer。
-		if contestPending(s) {
-			return nil
-		}
+		return routeContest(s)
 	}
 
 	// 12. 正常续写（单 Writer 或竞稿未启用）
@@ -201,6 +194,10 @@ func routeContest(s State) *Instruction {
 	if !s.IsPromoted {
 		return nil
 	}
+	// 数据不一致（IsPromoted 但无 winner），保守降级返回 nil 交上层裁定，不派 writer_ 坏指令
+	if s.VerdictWinner == "" {
+		return nil
+	}
 	// 4. 已提升 → 派中选 writer 润色（Task 文本与候选不同，规避 dedupe）
 	return &Instruction{
 		Agent:   "writer_" + s.VerdictWinner,
@@ -208,22 +205,6 @@ func routeContest(s State) *Instruction {
 		Reason:  fmt.Sprintf("竞稿：%s 中选，润色后提交", s.VerdictWinner),
 		Chapter: ch,
 	}
-}
-
-// contestPending 报告本竞稿章是否仍在中途（候选未齐 / 无裁定 / 未提升）。
-func contestPending(s State) bool {
-	for _, persona := range s.Personas {
-		if !s.CandidatesReady[persona] {
-			return true
-		}
-	}
-	if !s.HasVerdict {
-		return true
-	}
-	if !s.IsPromoted {
-		return true
-	}
-	return false
 }
 
 // FormatMessage 把 Instruction 格式化为发给 Coordinator 的用户消息。

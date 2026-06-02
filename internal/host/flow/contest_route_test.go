@@ -75,3 +75,14 @@ func TestRoute_Contest_Promoted_Polish(t *testing.T) {
 		t.Fatal("润色 Task 不能与候选 Task 相同")
 	}
 }
+
+func TestRoute_Contest_PromotedButEmptyWinner_ReturnsNil(t *testing.T) {
+	s := contestWritingState(1)
+	s.CandidatesReady = map[string]bool{"wuzei": true, "tudou": true}
+	s.HasVerdict = true
+	s.VerdictWinner = ""
+	s.IsPromoted = true
+	if got := Route(s); got != nil {
+		t.Fatalf("winner 为空应返回 nil 降级，got %+v", got)
+	}
+}
