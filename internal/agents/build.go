@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/voocel/ainovel-cli/assets"
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/voocel/ainovel-cli/internal/host/persona"
 	"github.com/voocel/ainovel-cli/internal/host/reminder"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
@@ -238,7 +240,76 @@ func BuildCoordinator(
 		},
 	}
 
-	subagentTool := subagent.New(architectShort, architectLong, writer, editor)
+	// ---- 多人格竞稿装配 ----
+	contestCfg := cfg.WritingContest.Normalize()
+	var contestSubagents []subagent.Config
+	if contestCfg.Enabled() {
+		styleGen := func(ctx context.Context, author string) (string, error) {
+			return generatePersonaStyle(ctx, writerModel, author)
+		}
+		personas, perr := persona.New(store, styleGen).EnsurePersonas(context.Background(), contestCfg.Personas)
+		if perr != nil {
+			slog.Warn("persona 生成异常，按已得结果继续", "module", "agent", "err", perr)
+		}
+		for _, p := range personas {
+			pSlug := p.Slug
+			personaTools := []agentcore.Tool{
+				contextTool,
+				readChapter,
+				tools.NewPlanChapterTool(store),
+				tools.NewDraftPersonaTool(store, pSlug),
+				tools.NewCheckConsistencyTool(store),
+				tools.NewCommitChapterTool(store).WithRules(rulesOpts),
+			}
+			personaPrompt := writerPrompt + "\n\n## 你的写作人格\n" + p.StyleBlock
+			contestSubagents = append(contestSubagents, subagent.Config{
+				Name:               "writer_" + pSlug,
+				Description:        fmt.Sprintf("竞稿写手（人格：%s）", p.Author),
+				Model:              writerModel,
+				SystemPrompt:       personaPrompt,
+				Tools:              personaTools,
+				MaxTurns:           30,
+				MaxRetries:         subagentMaxRetries,
+				ToolsAreIdempotent: true,
+				OnMessage:          onMsg,
+				// 注意：不设 StopAfterTools。
+				// 候选阶段需要在 draft_persona 后停止（由 CandidateStopGuard 保证）；
+				// 润色阶段需要推进到 commit_chapter（由 WriterStopGuard 保证）。
+				// 若固定 StopAfterTools:commit_chapter，候选阶段则无法在 draft_persona 干净停止。
+				// StopGuardFactory 通过检测 task 文本中是否含"润色"来切换两阶段语义。
+				StopGuardFactory: func(_, task string) agentcore.StopGuard {
+					// task 含"润色" → 中选 writer 走润色+提交，要求 commit。
+					// 否则为候选阶段 → 要求写候选草稿。
+					if strings.Contains(task, "润色") {
+						return reminder.NewWriterStopGuard(store)
+					}
+					return reminder.NewCandidateStopGuard(store)
+				},
+			})
+		}
+
+		// Judge：固定复用 editor 模型。
+		// ModelSet 没有 ForRef 入口，自定义 judge 模型属后续增强，暂不实现（YAGNI）。
+		contestSubagents = append(contestSubagents, subagent.Config{
+			Name:               "judge",
+			Description:        "选优裁判：对比多份候选稿，选优并给修改意见",
+			Model:              editorModel,
+			SystemPrompt:       bundle.Prompts.Judge,
+			Tools:              []agentcore.Tool{contextTool, readChapter, tools.NewSaveVerdictTool(store)},
+			MaxTurns:           15,
+			MaxRetries:         subagentMaxRetries,
+			ToolsAreIdempotent: true,
+			OnMessage:          onMsg,
+			StopAfterTools:     []string{"save_verdict"},
+			StopGuardFactory: func(_, _ string) agentcore.StopGuard {
+				return reminder.NewJudgeStopGuard(store)
+			},
+		})
+	}
+
+	allSubagents := []subagent.Config{architectShort, architectLong, writer, editor}
+	allSubagents = append(allSubagents, contestSubagents...)
+	subagentTool := subagent.New(allSubagents...)
 
 	coordinatorEngine := newContextManager(contextManagerConfig{
 		Model:            coordinatorModel,
@@ -277,4 +348,23 @@ func decodeSaveFoundationResult(toolName string, result json.RawMessage) saveFou
 	var r saveFoundationResult
 	_ = json.Unmarshal(result, &r)
 	return r
+}
+
+// generatePersonaStyle 让 LLM 依作者名生成一段文风 prompt 片段。
+// 失败由调用方（persona.Generator）兜底，这里只负责一次模型调用。
+// 调用模式对齐 internal/host/imp/foundation.go:41。
+func generatePersonaStyle(ctx context.Context, model agentcore.ChatModel, author string) (string, error) {
+	prompt := fmt.Sprintf(
+		"请用 150 字以内，描述网文作者「%s」的写作风格特征，用于指导另一个 AI 模仿其文风。"+
+			"覆盖：句式节奏、用词偏好、叙事视角、情绪渲染、擅长题材。直接输出风格描述，不要前缀。",
+		author,
+	)
+	resp, err := model.Generate(ctx, []agentcore.Message{agentcore.UserMsg(prompt)}, nil)
+	if err != nil {
+		return "", err
+	}
+	if resp == nil {
+		return "", fmt.Errorf("model returned nil response")
+	}
+	return strings.TrimSpace(resp.Message.TextContent()), nil
 }
