@@ -91,8 +91,11 @@ func (s *ContestStore) PromoteCandidate(chapter int, winner string) error {
 		return fmt.Errorf("write promoted draft: %w", err)
 	}
 	v, err := s.LoadVerdict(chapter)
-	if err != nil || v == nil {
+	if err != nil {
 		return fmt.Errorf("load verdict before mark promoted: %w", err)
+	}
+	if v == nil {
+		return fmt.Errorf("chapter %d has no verdict; call SaveVerdict before PromoteCandidate", chapter)
 	}
 	v.Promoted = true
 	return s.SaveVerdict(*v)
