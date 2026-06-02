@@ -50,7 +50,7 @@ type State struct {
 	CandidatesReady map[string]bool // 各 persona 候选稿是否到位
 	HasVerdict      bool            // 本章是否已有裁定
 	VerdictWinner   string          // 中选 persona slug
-	Promoted        bool            // 中选稿是否已提升为正式 draft.md
+	IsPromoted      bool            // 中选稿是否已提升为正式 draft.md
 }
 
 // Route 根据事实返回下一步指令；返回 nil 表示让 Coordinator LLM 自主裁定。
