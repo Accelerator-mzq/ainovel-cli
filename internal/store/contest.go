@@ -71,6 +71,23 @@ func (s *ContestStore) LoadVerdict(chapter int) (*domain.Verdict, error) {
 	return &v, nil
 }
 
+// SavePersonas 缓存人格映射（key=作者名）。
+func (s *ContestStore) SavePersonas(m map[string]domain.Persona) error {
+	return s.io.WriteJSON("personas.json", m)
+}
+
+// LoadPersonas 读取人格缓存；不存在返回空 map。
+func (s *ContestStore) LoadPersonas() (map[string]domain.Persona, error) {
+	m := make(map[string]domain.Persona)
+	if err := s.io.ReadJSON("personas.json", &m); err != nil {
+		if os.IsNotExist(err) {
+			return map[string]domain.Persona{}, nil
+		}
+		return nil, err
+	}
+	return m, nil
+}
+
 // IsPromoted 报告本章中选稿是否已提升为正式 draft.md。
 func (s *ContestStore) IsPromoted(chapter int) bool {
 	v, err := s.LoadVerdict(chapter)
