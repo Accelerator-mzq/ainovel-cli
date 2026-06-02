@@ -17,6 +17,7 @@ import (
 // 候选阶段写隔离候选槽（drafts/NN.cand-<slug>.md），
 // 润色阶段（本 persona 中选且已提升）写正式 draft.md。
 // Name 仍为 "draft_chapter"，使 writer prompt 与 StopAfterTools 无需改动。
+// 阶段每次 Execute 独立判定：Promoted 置位前写候选槽，置位后（且本 persona 中选）写正式 draft.md。
 type DraftPersonaTool struct {
 	store   *store.Store
 	persona string
@@ -103,8 +104,12 @@ func (t *DraftPersonaTool) Execute(_ context.Context, args json.RawMessage) (jso
 	}
 
 	phase := "candidate"
+	// 候选阶段必须就此结束等待评审，绝不能引导 writer 调 commit_chapter，
+	// 否则与 CandidateStopGuard 冲突造成无效 LLM 调用。
+	nextStep := "候选稿已保存。本轮到此结束，等待评审。不要调用 check_consistency 或 commit_chapter。"
 	if polish {
 		phase = "polish"
+		nextStep = "润色稿已保存。请继续 check_consistency，然后 commit_chapter 提交终稿。"
 	}
 	return json.Marshal(map[string]any{
 		"written":    true,
@@ -113,6 +118,6 @@ func (t *DraftPersonaTool) Execute(_ context.Context, args json.RawMessage) (jso
 		"phase":      phase,
 		"mode":       a.Mode,
 		"word_count": utf8.RuneCountInString(a.Content),
-		"next_step":  "候选阶段：写完即可结束；润色阶段：继续 check_consistency 后 commit_chapter",
+		"next_step":  nextStep,
 	})
 }
