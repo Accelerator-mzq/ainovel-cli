@@ -42,6 +42,15 @@ type State struct {
 
 	// 基础设定缺项（规划阶段的补齐信号）。
 	FoundationMissing []string
+
+	// 竞稿事实（ContestEnabled=false 时其余字段无意义）。
+	ContestEnabled  bool            // 是否启用多人格竞稿
+	Personas        []string        // persona slug 列表，顺序即写作顺序
+	ContestChapter  int             // 当前竞稿目标章（= NextChapter），0 表示不适用
+	CandidatesReady map[string]bool // 各 persona 候选稿是否到位
+	HasVerdict      bool            // 本章是否已有裁定
+	VerdictWinner   string          // 中选 persona slug
+	Promoted        bool            // 中选稿是否已提升为正式 draft.md
 }
 
 // Route 根据事实返回下一步指令；返回 nil 表示让 Coordinator LLM 自主裁定。

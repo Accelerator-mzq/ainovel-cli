@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -35,5 +36,40 @@ func LoadState(store *storepkg.Store) State {
 		}
 	}
 
+	return s
+}
+
+// ContestConfig 是 LoadStateWithContest 需要的竞稿静态配置（来自 bootstrap.Config 解析后的 slug 列表）。
+type ContestConfig struct {
+	Personas []string // persona slug，顺序即写作顺序；len<2 视为未启用
+}
+
+// LoadStateWithContest 在 LoadState 基础上补齐竞稿事实。
+// 非竞稿场景（cfg.Personas<2）等价于原 LoadState。
+func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
+	s := LoadState(store)
+	if len(cfg.Personas) < 2 {
+		return s
+	}
+	s.ContestEnabled = true
+	s.Personas = cfg.Personas
+
+	if s.Progress == nil || s.Progress.Phase != domain.PhaseWriting {
+		return s
+	}
+	// 只在"正常续写"语义下编排竞稿：有重写队列/审阅/弧末后处理时不介入。
+	next := s.Progress.NextChapter()
+	if next <= 0 {
+		return s
+	}
+	s.ContestChapter = next
+	if ready, err := store.Contest.ListCandidates(next, cfg.Personas); err == nil {
+		s.CandidatesReady = ready
+	}
+	if v, err := store.Contest.LoadVerdict(next); err == nil && v != nil {
+		s.HasVerdict = true
+		s.VerdictWinner = v.Winner
+		s.Promoted = v.Promoted
+	}
 	return s
 }
