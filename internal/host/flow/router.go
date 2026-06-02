@@ -146,7 +146,21 @@ func Route(s State) *Instruction {
 		}
 	}
 
-	// 12. 正常续写
+	// 11. 多人格竞稿编排（仅在正常续写语义下；重写/审阅/弧末已在上面拦截返回）
+	if s.ContestEnabled && s.ContestChapter > 0 {
+		if inst := routeContest(s); inst != nil {
+			return inst
+		}
+		// routeContest 返回 nil 的两种情况：
+		//   a) verdict 已存在但未提升 —— 交 dispatcher 内联提升后重算，这里返回 nil
+		//   b) 本章竞稿已全部完成 —— 落到下面正常续写（NextChapter 已推进）
+		// 用 contestPending 区分：仍在竞稿中途则不要 fall through 到单 writer。
+		if contestPending(s) {
+			return nil
+		}
+	}
+
+	// 12. 正常续写（单 Writer 或竞稿未启用）
 	next := p.NextChapter()
 	if next <= 0 {
 		return nil
@@ -157,6 +171,59 @@ func Route(s State) *Instruction {
 		Reason:  "续写下一章",
 		Chapter: next,
 	}
+}
+
+// routeContest 计算竞稿章的下一步指令；返回 nil 表示"无 writer/judge 指令需要派"
+// （要么等 dispatcher 内联提升，要么本章已完成）。
+func routeContest(s State) *Instruction {
+	ch := s.ContestChapter
+	// 1. 候选稿未齐 → 逐个派 persona writer 写候选
+	for _, persona := range s.Personas {
+		if !s.CandidatesReady[persona] {
+			return &Instruction{
+				Agent:   "writer_" + persona,
+				Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
+				Reason:  fmt.Sprintf("竞稿：persona %s 候选稿未完成", persona),
+				Chapter: ch,
+			}
+		}
+	}
+	// 2. 候选齐、无裁定 → 派 judge
+	if !s.HasVerdict {
+		return &Instruction{
+			Agent:   "judge",
+			Task:    fmt.Sprintf("评审第 %d 章的 %d 份候选稿，选优并给修改意见（save_verdict）", ch, len(s.Personas)),
+			Reason:  "竞稿：候选稿已齐，待选优",
+			Chapter: ch,
+		}
+	}
+	// 3. 有裁定、未提升 → 返回 nil，由 dispatcher 内联提升
+	if !s.IsPromoted {
+		return nil
+	}
+	// 4. 已提升 → 派中选 writer 润色（Task 文本与候选不同，规避 dedupe）
+	return &Instruction{
+		Agent:   "writer_" + s.VerdictWinner,
+		Task:    fmt.Sprintf("按选优意见润色并提交第 %d 章", ch),
+		Reason:  fmt.Sprintf("竞稿：%s 中选，润色后提交", s.VerdictWinner),
+		Chapter: ch,
+	}
+}
+
+// contestPending 报告本竞稿章是否仍在中途（候选未齐 / 无裁定 / 未提升）。
+func contestPending(s State) bool {
+	for _, persona := range s.Personas {
+		if !s.CandidatesReady[persona] {
+			return true
+		}
+	}
+	if !s.HasVerdict {
+		return true
+	}
+	if !s.IsPromoted {
+		return true
+	}
+	return false
 }
 
 // FormatMessage 把 Instruction 格式化为发给 Coordinator 的用户消息。
