@@ -28,6 +28,10 @@ func agentToRole(name string) string {
 	if strings.HasPrefix(name, "architect_") {
 		return "architect"
 	}
+	// 竞稿写手 writer_<slug> 的 cost 归属到 writer role，否则会按 agent 全名当成独立 role 算错。
+	if strings.HasPrefix(name, "writer_") {
+		return "writer"
+	}
 	return name
 }
 
@@ -247,7 +251,11 @@ func BuildCoordinator(
 		styleGen := func(ctx context.Context, author string) (string, error) {
 			return generatePersonaStyle(ctx, writerModel, author)
 		}
-		personas, perr := persona.New(store, styleGen).EnsurePersonas(context.Background(), contestCfg.Personas)
+		// EnsurePersonas 串行调 N 次 LLM，给整体加超时避免冷启动让 host.New 挂起；
+		// 超时由 persona.Generator 内部兜底为通用文风，不阻断流程。
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		personas, perr := persona.New(store, styleGen).EnsurePersonas(ctx, contestCfg.Personas)
 		if perr != nil {
 			slog.Warn("persona 生成异常，按已得结果继续", "module", "agent", "err", perr)
 		}
@@ -290,21 +298,34 @@ func BuildCoordinator(
 
 		// Judge：固定复用 editor 模型。
 		// ModelSet 没有 ForRef 入口，自定义 judge 模型属后续增强，暂不实现（YAGNI）。
-		contestSubagents = append(contestSubagents, subagent.Config{
-			Name:               "judge",
-			Description:        "选优裁判：对比多份候选稿，选优并给修改意见",
-			Model:              editorModel,
-			SystemPrompt:       bundle.Prompts.Judge,
-			Tools:              []agentcore.Tool{contextTool, readChapter, tools.NewSaveVerdictTool(store)},
-			MaxTurns:           15,
-			MaxRetries:         subagentMaxRetries,
-			ToolsAreIdempotent: true,
-			OnMessage:          onMsg,
-			StopAfterTools:     []string{"save_verdict"},
-			StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-				return reminder.NewJudgeStopGuard(store)
-			},
-		})
+		// 仅在确有 >=2 份候选 persona 时才注册 judge：store 异常导致 personas 为空
+		// 时不注册无用的 judge（无候选可裁）。
+		if len(personas) >= 2 {
+			if contestCfg.Judge != nil {
+				slog.Warn("writing_contest.judge 模型配置暂不生效，当前复用 editor 模型", "module", "agent")
+			}
+			// judge 读候选稿需要 persona 的 slug 列表，从已生成的 personas 提取。
+			judgeSlugs := make([]string, 0, len(personas))
+			for _, p := range personas {
+				judgeSlugs = append(judgeSlugs, p.Slug)
+			}
+			contestSubagents = append(contestSubagents, subagent.Config{
+				Name:         "judge",
+				Description:  "选优裁判：对比多份候选稿，选优并给修改意见",
+				Model:        editorModel,
+				SystemPrompt: bundle.Prompts.Judge,
+				// read_candidates 一次性读本章所有候选稿；readChapter 保留供 judge 读已提交终稿做连贯性参考。
+				Tools:              []agentcore.Tool{contextTool, readChapter, tools.NewReadCandidatesTool(store, judgeSlugs), tools.NewSaveVerdictTool(store)},
+				MaxTurns:           15,
+				MaxRetries:         subagentMaxRetries,
+				ToolsAreIdempotent: true,
+				OnMessage:          onMsg,
+				StopAfterTools:     []string{"save_verdict"},
+				StopGuardFactory: func(_, _ string) agentcore.StopGuard {
+					return reminder.NewJudgeStopGuard(store)
+				},
+			})
+		}
 	}
 
 	allSubagents := []subagent.Config{architectShort, architectLong, writer, editor}
