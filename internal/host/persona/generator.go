@@ -38,8 +38,12 @@ func (g *Generator) EnsurePersonas(ctx context.Context, authors []string) ([]dom
 	dirty := false
 
 	for i, author := range authors {
-		// 缓存命中且 StyleBlock 非空时直接复用
+		// 缓存命中且 StyleBlock 非空时复用文风，但 slug 必须按当前 index 重算。
+		// 缓存的价值在于不重新调 LLM 生成 StyleBlock；slug 是 index 相关的（中文作者
+		// → persona{index+1}），若沿用缓存里的旧 slug，重排序/前插 persona 会导致
+		// slug 与 Slugs() 映射颠倒（build.go 注册与 host.go 路由张冠李戴 → 文风错位）。
 		if p, ok := cached[author]; ok && p.StyleBlock != "" {
+			p.Slug = slugFor(author, i)
 			out = append(out, p)
 			continue
 		}

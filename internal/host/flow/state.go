@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"log/slog"
+
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
@@ -65,6 +67,10 @@ func LoadStateWithContest(store *storepkg.Store, cfg ContestConfig) State {
 	s.ContestChapter = next
 	if ready, err := store.Contest.ListCandidates(next, cfg.Personas); err == nil {
 		s.CandidatesReady = ready
+	} else {
+		// 出错时 CandidatesReady 保持 nil；routeContest 读 nil map 安全（不 panic），
+		// 但会让全 persona 显示未就绪 → 重复派第一个 writer。磁盘错误本就该暴露，记日志使其可见。
+		slog.Warn("contest ListCandidates failed", "module", "host.flow", "chapter", next, "err", err)
 	}
 	if v, err := store.Contest.LoadVerdict(next); err == nil && v != nil {
 		s.HasVerdict = true

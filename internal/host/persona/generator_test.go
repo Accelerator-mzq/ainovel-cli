@@ -38,6 +38,29 @@ func TestGenerate_UsesCacheOnSecondCall(t *testing.T) {
 	}
 }
 
+func TestEnsurePersonas_SlugFollowsCurrentOrder_NotCache(t *testing.T) {
+	st := store.NewStore(t.TempDir())
+	gen := func(ctx context.Context, author string) (string, error) { return "风格:" + author, nil }
+	g := New(st, gen)
+	// 第一次:乌贼在 index0 → persona1,土豆 index1 → persona2
+	_, _ = g.EnsurePersonas(context.Background(), []string{"乌贼", "土豆"})
+	// 第二次:对调顺序。EnsurePersonas 返回的 slug 必须跟随当前 index,而非缓存旧值
+	got, err := g.EnsurePersonas(context.Background(), []string{"土豆", "乌贼"})
+	if err != nil {
+		t.Fatalf("EnsurePersonas: %v", err)
+	}
+	// 关键:EnsurePersonas 返回的 slug 顺序必须与 Slugs() 一致
+	want := Slugs([]string{"土豆", "乌贼"}) // [persona1, persona2]
+	for i := range want {
+		if got[i].Slug != want[i] {
+			t.Fatalf("位置 %d: EnsurePersonas slug=%q, Slugs()=%q — 缓存命中后 slug 未跟随当前 index", i, got[i].Slug, want[i])
+		}
+		if got[i].Author != []string{"土豆", "乌贼"}[i] {
+			t.Fatalf("位置 %d author 错位: %q", i, got[i].Author)
+		}
+	}
+}
+
 func TestGenerate_FallbackOnError(t *testing.T) {
 	st := store.NewStore(t.TempDir())
 	gen := func(ctx context.Context, author string) (string, error) {
