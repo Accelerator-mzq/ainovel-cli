@@ -53,6 +53,9 @@ type State struct {
 	IsPromoted      bool            // 中选稿是否已提升为正式 draft.md
 
 	VerdictRevisionNotes string // 中选稿的修改意见（来自 verdict，供润色 writer 参考）
+
+	ContestConcurrent bool            // 候选生成是否并发（true=一次 parallel 批量派发）
+	Abandoned         map[string]bool // 本章已弃权 persona slug（并发失败收敛）
 }
 
 // Route 根据事实返回下一步指令；返回 nil 表示让 Coordinator LLM 自主裁定。
