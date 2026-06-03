@@ -150,7 +150,12 @@ func (s *ContestStore) AbandonedPersonas(chapter int) (map[string]bool, error) {
 
 // RecordAttempts 为每个 failed persona 的失败计数 +1，达到 threshold 的移入弃权名单。
 // 已弃权的 persona 跳过。返回是否有新 persona 被弃权（调用方据此决定是否重载 State）。
+// 单进程假设：调用方需保证同一章节的调用在单进程内串行（依赖 IO 互斥锁），
+// 多进程并发会丢失计数更新（read-modify-write 无跨进程原子保护）。
 func (s *ContestStore) RecordAttempts(chapter int, failed []string, threshold int) (bool, error) {
+	if threshold <= 0 {
+		return false, fmt.Errorf("RecordAttempts: threshold 必须 > 0, got %d", threshold)
+	}
 	cp, err := s.LoadContestProgress(chapter)
 	if err != nil {
 		return false, err
