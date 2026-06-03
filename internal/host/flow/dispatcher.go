@@ -13,11 +13,17 @@ import (
 // maxCandidateAttempts 是单个 persona 候选连续失败的弃权阈值（并发失败收敛）。
 const maxCandidateAttempts = 3
 
+// dispatchCoordinator 是 Dispatcher 依赖的 coordinator 能力子集，便于测试注入 fake。
+type dispatchCoordinator interface {
+	Subscribe(fn func(agentcore.Event)) func()
+	FollowUp(msg agentcore.AgentMessage)
+}
+
 // Dispatcher 订阅 Coordinator 事件，在子代理返回时计算路由并下达 Host 指令。
 //
 // 生命周期：Attach 返回一个 detach 函数；关闭 Host 时调用释放订阅。
 type Dispatcher struct {
-	coordinator *agentcore.Agent
+	coordinator dispatchCoordinator
 	store       *storepkg.Store
 
 	enabled atomic.Bool // 由 Host 控制是否派发（启动完成前应关）
@@ -102,6 +108,13 @@ func (d *Dispatcher) Dispatch() {
 				} else if changed {
 					state = LoadStateWithContest(d.store, d.contest)
 				}
+				// 无进展失败：清空去重键，让本轮候选批作为"显式重试"重新下发。
+				// 否则相同批次会被 dedupe 拦截、不发 FollowUp，弃权计数只能靠 StopGuard
+				// 非确定性唤醒推进（终审 I-1）。清空后由 Host 确定性驱动重试，累计到阈值
+				// 触发弃权、reload 后 Route 产出更小批/降级指令，循环有界收敛。
+				d.lastMu.Lock()
+				d.lastKey = ""
+				d.lastMu.Unlock()
 			}
 		}
 	}
