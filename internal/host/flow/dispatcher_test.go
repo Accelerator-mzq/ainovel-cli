@@ -24,7 +24,6 @@ func TestDedupeKey_BatchVsSingle(t *testing.T) {
 }
 
 // TestFailedFromLastBatch 验证"上一批派出但仍缺候选且未弃权者计为失败"的逻辑。
-// failedFromLastBatch：上一批中仍缺候选且未弃权者计为失败。
 func TestFailedFromLastBatch(t *testing.T) {
 	state := State{
 		CandidatesReady: map[string]bool{"wuzei": true, "tudou": false, "maibao": false},

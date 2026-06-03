@@ -30,6 +30,9 @@ type Dispatcher struct {
 	//   1. LLM 纯文字 turn 偶尔也会触发 ToolExecEnd?（防御）
 	//   2. 多次 subagent 调用间状态未推进（例：subagent 报错后 coordinator 重派，Router 也会再次派同一章）
 	// FollowUp 语义是 append，若不去重会把同一条指令重复压进 followUpQ，污染 Coordinator 上下文。
+	//
+	// lastMu 同时保护 lastKey、lastCandChapter、lastCandPersonas 三者：
+	// Dispatch 可能被事件 goroutine（consumeLoop 投递）与 Host 主动调用并发进入。
 	lastMu  sync.Mutex
 	lastKey string
 
@@ -85,8 +88,14 @@ func (d *Dispatcher) Dispatch() {
 
 	// 并发候选失败收敛：上一批仍缺候选者计失败，超阈值弃权后重读。
 	if state.ContestEnabled && state.ContestConcurrent && state.ContestChapter > 0 && !state.HasVerdict {
-		if d.lastCandChapter == state.ContestChapter {
-			if failed := failedFromLastBatch(d.lastCandPersonas, state); len(failed) > 0 {
+		// 持锁快照内存态，避免与本函数末尾的写入并发（Dispatch 可能被事件 goroutine 与
+		// Host 主动调用并发进入）。快照后立即释放锁，绝不持锁调 store。
+		d.lastMu.Lock()
+		lastChapter := d.lastCandChapter
+		lastPersonas := d.lastCandPersonas
+		d.lastMu.Unlock()
+		if lastChapter == state.ContestChapter {
+			if failed := failedFromLastBatch(lastPersonas, state); len(failed) > 0 {
 				changed, err := d.store.Contest.RecordAttempts(state.ContestChapter, failed, maxCandidateAttempts)
 				if err != nil {
 					slog.Warn("contest record attempts failed", "module", "host.flow", "chapter", state.ContestChapter, "err", err)
@@ -106,17 +115,21 @@ func (d *Dispatcher) Dispatch() {
 		return
 	}
 
-	// 记录本次并发候选批的 pending，供下次失败收敛判定。
+	// 记录本次并发候选批的 pending，供下次失败收敛判定；
+	// 非批量派发（单派/judge）清零内存态，防止陈旧 lastCand 误判失败。
+	d.lastMu.Lock()
 	if len(inst.Batch) > 0 {
 		personas := make([]string, 0, len(inst.Batch))
 		for _, t := range inst.Batch {
 			personas = append(personas, strings.TrimPrefix(t.Agent, "writer_"))
 		}
-		d.lastMu.Lock()
 		d.lastCandChapter = inst.Chapter
 		d.lastCandPersonas = personas
-		d.lastMu.Unlock()
+	} else {
+		d.lastCandChapter = 0
+		d.lastCandPersonas = nil
 	}
+	d.lastMu.Unlock()
 
 	// Writer / 批量 writer 任务：派发同刻把章节标为进行中（UI 即时反映）。
 	if (strings.HasPrefix(inst.Agent, "writer") || len(inst.Batch) > 0) && inst.Chapter > 0 && d.store != nil {
@@ -143,6 +156,7 @@ func dedupeKey(i *Instruction) string {
 }
 
 // failedFromLastBatch 返回上一批派出但仍缺候选且未弃权的 persona（视为本轮失败）。
+// 与 PendingCandidates 的区别：本函数作用于上一批 dispatcher 实际派出的 persona 子集，而非全量 Personas。
 func failedFromLastBatch(lastPersonas []string, s State) []string {
 	var failed []string
 	for _, p := range lastPersonas {
