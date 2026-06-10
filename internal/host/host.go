@@ -169,6 +169,11 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		if content, files, serr := CollectUserSettings(cwd); serr != nil {
 			slog.Warn("用户设定收集失败", "module", "boot", "err", serr)
 		} else if files > 0 {
+			// 合并保留共创原文段：CollectUserSettings 只含 settings/ 文件内容，
+			// 直接全量覆盖会冲掉 Ctrl+S 落盘的共创对话原文（Resume 不会重放 Append）。
+			if existing, lerr := store.Settings.LoadUserSettings(); lerr == nil {
+				content = mergeSettingsPreservingCocreate(content, existing)
+			}
 			if werr := store.Settings.SaveUserSettings(content); werr != nil {
 				slog.Warn("用户设定落盘失败", "module", "boot", "err", werr)
 			} else {
