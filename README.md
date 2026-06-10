@@ -2,6 +2,8 @@
 
 全自动 AI 长篇小说创作引擎。Coordinator 在一次 Prompt 里驱动 Architect / Writer / Editor 三个子代理完成整本书的创作，Host 只做启动、恢复和观察。从一句话需求到完整小说，全程无需人工干预。
 
+> 📖 **[使用手册](docs/user-guide.md)** — 面向用户的完整说明书：安装配置 / 写书全流程 / TUI 命令参考 / 配置项全量说明 / 规则定制 / FAQ 排障。本 README 偏架构与设计，想直接上手看手册即可。
+
 <p align="center">
   <img src="scripts/sample.gif" alt="ainovel-cli demo" width="800">
   <img src="scripts/novel.png" alt="ainovel-cli bg" width="800">
@@ -20,6 +22,7 @@
 - **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
 - **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
 - **多人格竞稿** — 配置 ≥2 个作者名后，每章由多个人格各写一稿，Judge 选优并给出修改意见，中选者润色后提交；不配置或 <2 个即退回普通单 Writer 模式，零额外成本
+- **成本预算门禁** — 配置 `budget.max_cost_usd` 后，累计成本达 80% 告警、达上限自动暂停（进度无损，调高上限重启即续写）；不配置零行为变化
 
 ## 架构
 
