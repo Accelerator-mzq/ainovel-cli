@@ -132,13 +132,20 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	h.observer = newObserver(coordinator, store, h.emitEvent, h.emitDelta, h.emitClear)
 	h.router = flow.NewDispatcher(coordinator, store)
 	// 竞稿模式：向 Dispatcher 注入 persona slug 列表，与 build.go 注册的 agent 命名保持一致。
-	// Slugs 与 EnsurePersonas 内部共用同一个 slugFor，保证 writer_<slug> 名字匹配。
+	// Slugs 与 EnsureFused 内部共用同一个 slugFor，保证 writer_<slug> 名字匹配。
+	// 画像缺失时跳过 SetContest——与 build.go 用同一谓词（MissingProfiles），
+	// 保证"subagent 不注册"与"路由不派发"一致，否则会派发到不存在的 agent。
 	if wc := cfg.WritingContest.Normalize(); wc.Enabled() {
-		h.router.SetContest(flow.ContestConfig{
-			Personas:    persona.Slugs(wc.Personas), // persona slug 列表
-			Concurrency: wc.Concurrency,             // 并发开关透传
-			Synopsis:    wc.SynopsisMode(),          // 两段式开关透传
-		})
+		if missing, perr := persona.MissingProfiles(store, wc.Personas); perr != nil || len(missing) > 0 {
+			slog.Warn("竞稿路由未启用：人格画像缺失或读取失败（详见 agent 模块日志）",
+				"module", "host", "missing", strings.Join(missing, "、"), "err", perr)
+		} else {
+			h.router.SetContest(flow.ContestConfig{
+				Personas:    persona.Slugs(wc.Personas), // persona slug 列表
+				Concurrency: wc.Concurrency,             // 并发开关透传
+				Synopsis:    wc.SynopsisMode(),          // 两段式开关透传
+			})
+		}
 	}
 	// 预算门禁：累计成本接近上限告警，超限拒绝派发并暂停。
 	if cfg.Budget.Enabled() {

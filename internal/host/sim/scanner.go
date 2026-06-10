@@ -20,6 +20,16 @@ type scannedSource struct {
 	content string
 }
 
+// personaCorpus 是 personas/<作者名>/ 子目录扫出的人格语料。
+type personaCorpus struct {
+	Author  string
+	Dir     string
+	Sources []scannedSource
+}
+
+// personasDirName 是保存各人格语料的子目录名，主画像扫描时跳过此目录。
+const personasDirName = "personas"
+
 func scanSources(root string) ([]scannedSource, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -37,11 +47,16 @@ func scanSources(root string) ([]scannedSource, error) {
 	}
 
 	var out []scannedSource
+	personasRoot := filepath.Join(root, personasDirName)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {
+			// personas/ 子树是人格语料，由 scanPersonaDirs 单独扫，不混入当前画像
+			if path == personasRoot {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !isSupportedSource(path) {
@@ -81,6 +96,45 @@ func scanSources(root string) ([]scannedSource, error) {
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].RelativePath < out[j].RelativePath
 	})
+	return out, nil
+}
+
+// scanPersonaDirs 扫描 root/personas/ 下的作者子目录，返回按作者名排序的人格语料列表。
+// personas/ 不存在返回 nil, nil；空子目录也会返回（Sources 为空），由调用方告警跳过。
+func scanPersonaDirs(root string) ([]personaCorpus, error) {
+	personasRoot := filepath.Join(strings.TrimSpace(root), personasDirName)
+	// 先 Stat 拦截"不存在/是文件"两种场景，保证跨平台行为一致：
+	// POSIX 上 os.ReadDir 对普通文件报 ENOTDIR（非 NotExist），若直接 ReadDir
+	// 会在 POSIX 报错而 Windows 静默放过，必须在 Stat 层统一拦截。
+	info, err := os.Stat(personasRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		// personas 是普通文件，视作无人格语料
+		return nil, nil
+	}
+	entries, err := os.ReadDir(personasRoot)
+	if err != nil {
+		// Stat 已确认是目录，此处错误为真实 IO 错误，直接返回
+		return nil, err
+	}
+	var out []personaCorpus
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(personasRoot, e.Name())
+		sources, err := scanSources(dir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, personaCorpus{Author: e.Name(), Dir: dir, Sources: sources})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Author < out[j].Author })
 	return out, nil
 }
 

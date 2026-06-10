@@ -6,10 +6,8 @@ import (
 )
 
 // 本文件验证「仿写画像 simulation」与「多人格竞稿」两功能同时开启时的集成正确性。
-// 聚焦交叉点：simulation 把画像指导注入了哪些角色的 system prompt、竞稿 persona
-// writer 是否会同时携带「画像指导 + 人格文风」两个信号。上游已测画像注入
-// novel_context（internal/tools/novel_context_simulation_test.go），但上游无竞稿，
-// 不会覆盖竞稿侧——此处补足。
+// StyleBlock 旧机制已删除，竞稿 writer 与普通 writer 共用同一 system prompt，
+// 文风信号唯一来源是 novel_context 注入的融合画像。
 
 // simulationGuidance 的稳定文本锚点（见 load.go const simulationGuidance）。
 const simGuidanceAnchor = "## 仿写画像"
@@ -39,25 +37,20 @@ func TestSimulationGuidanceInjectedPerRole(t *testing.T) {
 	}
 }
 
-// TestPersonaWriterCarriesBothSignals 是交叉验证的核心：竞稿 persona writer 的
-// system prompt = Writer 基底 + 人格 StyleBlock（见 internal/agents/build.go 中
-// personaPrompt 的拼接）。因 Writer 基底已被 simulation 包装，persona writer 必然
-// 同时携带「画像收敛」与「人格发散」两个文风信号——这正是质量软冲突的代码层根源。
-// 本测试确定性证明：两信号同时生效、互不覆盖、拼接不报错（但不评判 LLM 输出质量）。
-func TestPersonaWriterCarriesBothSignals(t *testing.T) {
+// TestContestWriterSingleStyleSignal 验证 StyleBlock 机制删除后的最终态：
+// 竞稿写手与普通 writer 共用同一 system prompt（含"## 仿写画像"指导段，
+// 运行期文风信号唯一来源是 novel_context 注入的融合画像），不再有
+// "## 你的写作人格" prompt 拼接。融合 prompt 资产必须可加载。
+func TestContestWriterSingleStyleSignal(t *testing.T) {
 	b := Load("default")
 
-	const personaMarker = "## 你的写作人格"
-	const fakeStyle = "【乌贼风格：阴郁悬疑、信息差驱动】" // 模拟 persona.StyleBlock
-
-	// 复现 internal/agents/build.go 的 persona prompt 拼接：writerPrompt + 人格块。
-	personaPrompt := b.Prompts.Writer + "\n\n" + personaMarker + "\n" + fakeStyle
-
-	if !strings.Contains(personaPrompt, simGuidanceAnchor) {
-		t.Error("persona writer 应继承 Writer 基底的仿写画像指导，实际缺失")
+	if !strings.Contains(b.Prompts.Writer, simGuidanceAnchor) {
+		t.Error("writer prompt 应含仿写画像指导段（竞稿写手复用同一 prompt）")
 	}
-	if !strings.Contains(personaPrompt, fakeStyle) {
-		t.Error("persona writer 应含人格 StyleBlock，实际缺失")
+	if strings.Contains(b.Prompts.Writer, "## 你的写作人格") {
+		t.Error("StyleBlock 人格块机制已删除，writer prompt 不应再含人格块标记")
 	}
-	t.Logf("persona writer 同时携带：仿写画像指导 + 人格文风（总长 %d 字节）→ 两信号叠加确认", len(personaPrompt))
+	if strings.TrimSpace(b.Prompts.SimulationPersonaFuse) == "" {
+		t.Error("simulation-persona-fuse prompt 应非空")
+	}
 }

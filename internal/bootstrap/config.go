@@ -138,7 +138,10 @@ type Config struct {
 // WritingContest 多人格竞稿配置。
 type WritingContest struct {
 	// Personas 是作者名列表（如 ["乌贼","卖报小郎君","土豆"]）。
-	// 数量即并行 Writer 数；< 2 时不启用竞稿。文风由启动时 LLM 依作者名生成。
+	// 数量即并行 Writer 数；< 2 时不启用竞稿。
+	// 每个作者名必须有对应人格画像：把该作者作品语料放入 ./simulate/personas/<作者名>/
+	// 并运行 /simulate 生成；缺任一画像则竞稿整体禁用（启动日志会列出缺失项），重启生效。
+	// 运行期写手的文风信号 = 人格画像与主画像的融合画像（经 novel_context 注入，单信号）。
 	Personas []string `json:"personas,omitempty"`
 	// Judge 可选，指定选优裁判模型；缺省复用 editor 角色模型。
 	Judge *ModelRef `json:"judge,omitempty"`

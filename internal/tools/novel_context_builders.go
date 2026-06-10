@@ -136,7 +136,7 @@ func (t *ContextTool) buildUserRules(result map[string]any) {
 }
 
 func (t *ContextTool) buildSimulationProfile(result map[string]any, sectionKey string, warn func(string, error)) {
-	profile, err := t.store.Simulation.Load()
+	profile, err := t.loadSimulationProfile()
 	if err != nil {
 		warn("simulation_profile", err)
 		return

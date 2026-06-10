@@ -14,6 +14,7 @@ import (
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host/persona"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host/reminder"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/host/sim"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/tools"
@@ -252,86 +253,108 @@ func BuildCoordinator(
 	}
 
 	// ---- 多人格竞稿装配 ----
+	// 人格文风信号 = 语料生成的人格画像与主画像的融合画像（生成期融合，运行期单信号）。
+	// 人格画像必须先经 /simulate 从 ./simulate/personas/<作者名>/ 语料生成；
+	// 缺任一画像则整体禁用竞稿（回退单 writer），不阻断启动——
+	// 首次配置时用户需要能进 TUI 跑 /simulate（鸡生蛋）。host.go 用同一谓词跳过 SetContest。
 	contestCfg := cfg.WritingContest.Normalize()
 	var contestSubagents []subagent.Config
 	if contestCfg.Enabled() {
-		styleGen := func(ctx context.Context, author string) (string, error) {
-			return generatePersonaStyle(ctx, writerModel, author)
-		}
-		// EnsurePersonas 串行调 N 次 LLM，给整体加超时避免冷启动让 host.New 挂起；
-		// 超时由 persona.Generator 内部兜底为通用文风，不阻断流程。
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		personas, perr := persona.New(store, styleGen).EnsurePersonas(ctx, contestCfg.Personas)
-		if perr != nil {
-			slog.Warn("persona 生成异常，按已得结果继续", "module", "agent", "err", perr)
-		}
-		for _, p := range personas {
-			pSlug := p.Slug
-			personaTools := []agentcore.Tool{
-				contextTool,
-				readChapter,
-				tools.NewPlanChapterTool(store),
-				tools.NewDraftPersonaTool(store, pSlug),
-				tools.NewCheckConsistencyTool(store),
-				tools.NewCommitChapterTool(store).WithRules(rulesOpts),
+		missing, merr := persona.MissingProfiles(store, contestCfg.Personas)
+		switch {
+		case merr != nil:
+			slog.Warn("读取人格画像失败，竞稿已禁用", "module", "agent", "err", merr)
+		case len(missing) > 0:
+			// 一并列出已有画像名：配置作者名与目录名拼写错位时，对照两个列表即可定位
+			available, _ := persona.AvailableProfiles(store)
+			slog.Warn("人格画像缺失，竞稿已禁用：请把对应作者语料放入 ./simulate/personas/<作者名>/ 并运行 /simulate，重启生效",
+				"module", "agent", "missing", strings.Join(missing, "、"), "available", strings.Join(available, "、"))
+		default:
+			fuse := func(ctx context.Context, base, pp *domain.SimulationProfile) (*domain.SimulationSynthesis, error) {
+				return sim.FuseSynthesis(ctx, writerModel, bundle.Prompts.SimulationPersonaFuse, base, pp)
 			}
-			personaPrompt := writerPrompt + "\n\n## 你的写作人格\n" + p.StyleBlock
-			contestSubagents = append(contestSubagents, subagent.Config{
-				Name:               "writer_" + pSlug,
-				Description:        fmt.Sprintf("竞稿写手（人格：%s）", p.Author),
-				Model:              writerModel,
-				SystemPrompt:       personaPrompt,
-				Tools:              personaTools,
-				MaxTurns:           30,
-				MaxRetries:         subagentMaxRetries,
-				ToolsAreIdempotent: true,
-				OnMessage:          onMsg,
-				// 注意：不设 StopAfterTools。
-				// 候选阶段需要在 draft_persona 后停止（由 CandidateStopGuard 保证）；
-				// 润色阶段需要推进到 commit_chapter（由 WriterStopGuard 保证）。
-				// 若固定 StopAfterTools:commit_chapter，候选阶段则无法在 draft_persona 干净停止。
-				// StopGuardFactory 通过检测 task 文本中是否含"润色"来切换两阶段语义。
-				StopGuardFactory: func(_, task string) agentcore.StopGuard {
-					// task 含"润色" → 中选 writer 走润色+提交，要求 commit。
-					// 否则为候选阶段 → 要求写候选草稿。
-					if strings.Contains(task, "润色") {
-						return reminder.NewWriterStopGuard(store)
-					}
-					return reminder.NewCandidateStopGuard(store)
-				},
-			})
-		}
+			// EnsureFused 最多串行 N 次融合 LLM 调用（缓存命中则 0 次），
+			// 加总超时避免冷启动让 host.New 挂起；失败由内部兜底人格画像，不阻断。
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			resolved, perr := persona.EnsureFused(ctx, store, contestCfg.Personas, fuse)
+			if perr != nil {
+				slog.Warn("融合画像异常，按已得结果继续", "module", "agent", "err", perr)
+			}
+			for _, p := range resolved {
+				pSlug := p.Slug
+				prof := p.Profile
+				if p.Fallback {
+					slog.Warn("融合画像生成失败，暂用人格画像原样（下次启动重试）", "module", "agent", "persona", p.Author)
+				}
+				// 专属 ContextTool：simulation_profile 即该写手的融合画像（运行期唯一文风信号）。
+				// writer.md 既有"## 仿写画像"指导段语义直接适配，无需任何 prompt 拼接。
+				personaContext := contextTool.WithProfileSource(func() (*domain.SimulationProfile, error) {
+					return prof, nil
+				})
+				personaTools := []agentcore.Tool{
+					personaContext,
+					readChapter,
+					tools.NewPlanChapterTool(store),
+					tools.NewDraftPersonaTool(store, pSlug),
+					tools.NewCheckConsistencyTool(store),
+					tools.NewCommitChapterTool(store).WithRules(rulesOpts),
+				}
+				contestSubagents = append(contestSubagents, subagent.Config{
+					Name:               "writer_" + pSlug,
+					Description:        fmt.Sprintf("竞稿写手（人格：%s）", p.Author),
+					Model:              writerModel,
+					SystemPrompt:       writerPrompt,
+					Tools:              personaTools,
+					MaxTurns:           30,
+					MaxRetries:         subagentMaxRetries,
+					ToolsAreIdempotent: true,
+					OnMessage:          onMsg,
+					// 注意：不设 StopAfterTools。
+					// 候选阶段需要在 draft_persona 后停止（由 CandidateStopGuard 保证）；
+					// 润色阶段需要推进到 commit_chapter（由 WriterStopGuard 保证）。
+					// 若固定 StopAfterTools:commit_chapter，候选阶段则无法在 draft_persona 干净停止。
+					// StopGuardFactory 通过检测 task 文本中是否含"润色"来切换两阶段语义。
+					StopGuardFactory: func(_, task string) agentcore.StopGuard {
+						// task 含"润色" → 中选 writer 走润色+提交，要求 commit。
+						// 否则为候选阶段 → 要求写候选草稿。
+						if strings.Contains(task, "润色") {
+							return reminder.NewWriterStopGuard(store)
+						}
+						return reminder.NewCandidateStopGuard(store)
+					},
+				})
+			}
 
-		// Judge：固定复用 editor 模型。
-		// ModelSet 没有 ForRef 入口，自定义 judge 模型属后续增强，暂不实现（YAGNI）。
-		// 仅在确有 >=2 份候选 persona 时才注册 judge：store 异常导致 personas 为空
-		// 时不注册无用的 judge（无候选可裁）。
-		if len(personas) >= 2 {
-			if contestCfg.Judge != nil {
-				slog.Warn("writing_contest.judge 模型配置暂不生效，当前复用 editor 模型", "module", "agent")
+			// Judge：固定复用 editor 模型。
+			// ModelSet 没有 ForRef 入口，自定义 judge 模型属后续增强，暂不实现（YAGNI）。
+			// 仅在确有 >=2 份候选 persona 时才注册 judge。
+			if len(resolved) >= 2 {
+				if contestCfg.Judge != nil {
+					slog.Warn("writing_contest.judge 模型配置暂不生效，当前复用 editor 模型", "module", "agent")
+				}
+				// judge 读候选稿需要 persona 的 slug 列表，从已解析的 resolved 提取。
+				judgeSlugs := make([]string, 0, len(resolved))
+				for _, p := range resolved {
+					judgeSlugs = append(judgeSlugs, p.Slug)
+				}
+				contestSubagents = append(contestSubagents, subagent.Config{
+					Name:         "judge",
+					Description:  "选优裁判：对比多份候选稿，选优并给修改意见",
+					Model:        editorModel,
+					SystemPrompt: bundle.Prompts.Judge,
+					// read_candidates 一次性读本章所有候选稿；readChapter 保留供 judge 读已提交终稿做连贯性参考。
+					Tools:              []agentcore.Tool{contextTool, readChapter, tools.NewReadCandidatesTool(store, judgeSlugs), tools.NewSaveVerdictTool(store)},
+					MaxTurns:           15,
+					MaxRetries:         subagentMaxRetries,
+					ToolsAreIdempotent: true,
+					OnMessage:          onMsg,
+					StopAfterTools:     []string{"save_verdict"},
+					StopGuardFactory: func(_, _ string) agentcore.StopGuard {
+						return reminder.NewJudgeStopGuard(store)
+					},
+				})
 			}
-			// judge 读候选稿需要 persona 的 slug 列表，从已生成的 personas 提取。
-			judgeSlugs := make([]string, 0, len(personas))
-			for _, p := range personas {
-				judgeSlugs = append(judgeSlugs, p.Slug)
-			}
-			contestSubagents = append(contestSubagents, subagent.Config{
-				Name:         "judge",
-				Description:  "选优裁判：对比多份候选稿，选优并给修改意见",
-				Model:        editorModel,
-				SystemPrompt: bundle.Prompts.Judge,
-				// read_candidates 一次性读本章所有候选稿；readChapter 保留供 judge 读已提交终稿做连贯性参考。
-				Tools:              []agentcore.Tool{contextTool, readChapter, tools.NewReadCandidatesTool(store, judgeSlugs), tools.NewSaveVerdictTool(store)},
-				MaxTurns:           15,
-				MaxRetries:         subagentMaxRetries,
-				ToolsAreIdempotent: true,
-				OnMessage:          onMsg,
-				StopAfterTools:     []string{"save_verdict"},
-				StopGuardFactory: func(_, _ string) agentcore.StopGuard {
-					return reminder.NewJudgeStopGuard(store)
-				},
-			})
 		}
 	}
 
@@ -398,23 +421,4 @@ func decodeSaveFoundationResult(toolName string, result json.RawMessage) saveFou
 	var r saveFoundationResult
 	_ = json.Unmarshal(result, &r)
 	return r
-}
-
-// generatePersonaStyle 让 LLM 依作者名生成一段文风 prompt 片段。
-// 失败由调用方（persona.Generator）兜底，这里只负责一次模型调用。
-// 调用模式对齐 internal/host/imp/foundation.go:41。
-func generatePersonaStyle(ctx context.Context, model agentcore.ChatModel, author string) (string, error) {
-	prompt := fmt.Sprintf(
-		"请用 150 字以内，描述网文作者「%s」的写作风格特征，用于指导另一个 AI 模仿其文风。"+
-			"覆盖：句式节奏、用词偏好、叙事视角、情绪渲染、擅长题材。直接输出风格描述，不要前缀。",
-		author,
-	)
-	resp, err := model.Generate(ctx, []agentcore.Message{agentcore.UserMsg(prompt)}, nil)
-	if err != nil {
-		return "", err
-	}
-	if resp == nil {
-		return "", fmt.Errorf("model returned nil response")
-	}
-	return strings.TrimSpace(resp.Message.TextContent()), nil
 }

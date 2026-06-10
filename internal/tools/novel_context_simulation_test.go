@@ -97,3 +97,62 @@ func assertCompactSimulationProfile(t *testing.T, payload map[string]any, sectio
 		t.Fatalf("source_count = %v, want 1", got)
 	}
 }
+
+// 竞稿写手的专属 ContextTool 必须返回注入的融合画像，且不影响共享实例（防串台）。
+func TestContextToolWithProfileSourceOverrides(t *testing.T) {
+	dir := t.TempDir()
+	st := store.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	// store 里放主画像
+	if err := st.Simulation.Save(domain.SimulationProfile{
+		Version: domain.SimulationProfileVersion,
+		Synthesis: domain.SimulationSynthesis{
+			Style: domain.SimulationStyle{NarrativeVoice: []string{"base voice"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "Start", CoreEvent: "Begin"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Init("test", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	fused := &domain.SimulationProfile{
+		Version: domain.SimulationProfileVersion,
+		Synthesis: domain.SimulationSynthesis{
+			Style: domain.SimulationStyle{NarrativeVoice: []string{"fused persona voice"}},
+		},
+	}
+	shared := NewContextTool(st, References{}, "default", rules.LoadOptions{})
+	personaTool := shared.WithProfileSource(func() (*domain.SimulationProfile, error) { return fused, nil })
+
+	voiceOf := func(tool *ContextTool) string {
+		t.Helper()
+		raw, err := tool.Execute(context.Background(), json.RawMessage(`{"chapter":1}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		section := payload["working_memory"].(map[string]any)
+		compact := section["simulation_profile"].(map[string]any)
+		style := compact["style"].(map[string]any)
+		voices := style["narrative_voice"].([]any)
+		return voices[0].(string)
+	}
+
+	if got := voiceOf(personaTool); got != "fused persona voice" {
+		t.Fatalf("persona 实例应返回融合画像, got %q", got)
+	}
+	if got := voiceOf(shared); got != "base voice" {
+		t.Fatalf("共享实例应仍返回主画像（不串台）, got %q", got)
+	}
+}
