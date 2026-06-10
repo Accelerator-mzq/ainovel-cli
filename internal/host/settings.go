@@ -1,0 +1,107 @@
+package host
+
+import (
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// settings 收集体量上限：单文件 / 全部合计（rune 计）。
+// 超限截断并标注——上限取 Architect 上下文预算（novel_context trim 60KB）的安全余量。
+const (
+	maxSettingsFileRunes  = 30000
+	maxSettingsTotalRunes = 60000
+)
+
+// settingsExts 允许的设定文件扩展名（与 /simulate 的语料口径一致）。
+var settingsExts = map[string]bool{".md": true, ".txt": true, ".markdown": true}
+
+// CollectUserSettings 递归读取 baseDir/settings/ 下的文本文件，
+// 按相对路径字典序拼接为带文件头的 Markdown 全文。
+// 目录不存在返回空串；单文件与合计超限时截断并标注。
+func CollectUserSettings(baseDir string) (content string, files int, err error) {
+	root := filepath.Join(baseDir, "settings")
+	info, statErr := os.Stat(root)
+	if statErr != nil || !info.IsDir() {
+		return "", 0, nil // 没有 settings 目录是常态，不是错误
+	}
+
+	var paths []string
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if settingsExts[strings.ToLower(filepath.Ext(path))] {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return "", 0, fmt.Errorf("扫描 settings 目录失败: %w", walkErr)
+	}
+	sort.Strings(paths)
+
+	var b strings.Builder
+	total := 0
+	for _, p := range paths {
+		data, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return "", 0, fmt.Errorf("读取设定文件 %s 失败: %w", p, readErr)
+		}
+		text := strings.TrimSpace(string(data))
+		if text == "" {
+			continue
+		}
+		if runes := []rune(text); len(runes) > maxSettingsFileRunes {
+			text = string(runes[:maxSettingsFileRunes]) + "\n\n（已截断）"
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			rel = filepath.Base(p)
+		}
+		section := fmt.Sprintf("## 文件：%s\n\n%s\n\n", filepath.ToSlash(rel), text)
+		if total+len([]rune(section)) > maxSettingsTotalRunes {
+			b.WriteString("\n（更多设定文件因总量超限未纳入，请精简 settings/ 内容）\n")
+			break
+		}
+		b.WriteString(section)
+		total += len([]rune(section))
+		files++
+	}
+	return strings.TrimSpace(b.String()), files, nil
+}
+
+// AppendCoCreateTranscript 把共创对话用户原文追加进 user_settings.md。
+// 在已有设定（settings/ 目录内容）之后以独立章节追加；无已有内容则单独成文。
+func (h *Host) AppendCoCreateTranscript(transcript string) {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		return
+	}
+	existing, err := h.store.Settings.LoadUserSettings()
+	if err != nil {
+		slog.Warn("读取已有用户设定失败，跳过共创原文保全", "module", "boot", "err", err)
+		return
+	}
+	section := "# 共创对话用户原文（备查）\n\n" + transcript
+	merged := section
+	if strings.TrimSpace(existing) != "" {
+		// 去重：重复 Ctrl+S（重开同名书）时替换旧的共创段而不是无限追加
+		if idx := strings.Index(existing, "# 共创对话用户原文（备查）"); idx >= 0 {
+			existing = strings.TrimSpace(existing[:idx])
+		}
+		if existing != "" {
+			merged = existing + "\n\n" + section
+		}
+	}
+	if err := h.store.Settings.SaveUserSettings(merged); err != nil {
+		slog.Warn("共创原文落盘失败", "module", "boot", "err", err)
+	}
+}

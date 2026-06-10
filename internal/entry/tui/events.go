@@ -111,6 +111,11 @@ func bootstrapRuntime(rt *host.Host) tea.Cmd {
 
 func startRuntime(rt *host.Host, plan startup.Plan) tea.Cmd {
 	return func() tea.Msg {
+		// 共创模式 Ctrl+S 时，把对话里的用户原文落盘到 user_settings.md，
+		// 避免草稿（有损压缩）丢失用户粘贴的大段设定原文。
+		if plan.UserNotes != "" {
+			rt.AppendCoCreateTranscript(plan.UserNotes)
+		}
 		err := rt.StartPrepared(plan.StartPrompt)
 		return startResultMsg{err: err}
 	}
