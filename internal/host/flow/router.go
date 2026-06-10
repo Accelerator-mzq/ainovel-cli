@@ -62,6 +62,7 @@ type State struct {
 	IsPromoted           bool            // 中选稿是否已提升为正式 draft.md
 	VerdictRevisionNotes string          // 中选稿的修改意见（来自 verdict，供润色 writer 参考）
 	ContestConcurrent    bool            // 候选生成是否并发（true=一次 parallel 批量派发）
+	ContestSynopsis      bool            // 两段式：候选为梗概+开头，终稿阶段才写全章
 	// Abandoned: nil 表示读取失败（已降级处理），空 map 表示本章无弃权
 	Abandoned map[string]bool // 本章已弃权 persona slug（并发失败收敛）
 }
@@ -217,6 +218,12 @@ func routeContest(s State) *Instruction {
 		}
 	}
 
+	// 两段式候选只写梗概+开头试写；full 模式写全章候选。
+	candTask := fmt.Sprintf("写第 %d 章候选稿", ch)
+	if s.ContestSynopsis {
+		candTask = fmt.Sprintf("写第 %d 章候选梗概：先写 500-800 字情节梗概（含关键转折与章末钩子），再写本章开头约 300 字试写。不要写全章正文", ch)
+	}
+
 	// 1. 候选未齐 → 派候选（并发批量 / 串行逐个）。
 	pending := PendingCandidates(s)
 	if len(pending) > 0 {
@@ -226,7 +233,7 @@ func routeContest(s State) *Instruction {
 			for _, p := range pending {
 				batch = append(batch, SubTask{
 					Agent:   "writer_" + p,
-					Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
+					Task:    candTask,
 					Chapter: ch,
 				})
 			}
@@ -240,7 +247,7 @@ func routeContest(s State) *Instruction {
 		p := pending[0]
 		return &Instruction{
 			Agent:   "writer_" + p,
-			Task:    fmt.Sprintf("写第 %d 章候选稿", ch),
+			Task:    candTask,
 			Reason:  fmt.Sprintf("竞稿：persona %s 候选稿未完成", p),
 			Chapter: ch,
 		}
@@ -248,9 +255,13 @@ func routeContest(s State) *Instruction {
 
 	// 2. 候选齐、无裁定 → 派 judge（评审份数 = 非弃权 persona 数）。
 	if !s.HasVerdict {
+		form := "候选稿"
+		if s.ContestSynopsis {
+			form = "候选梗概"
+		}
 		return &Instruction{
 			Agent:   "judge",
-			Task:    fmt.Sprintf("评审第 %d 章的 %d 份候选稿，选优并给修改意见（save_verdict）", ch, nonAbandoned),
+			Task:    fmt.Sprintf("评审第 %d 章的 %d 份%s，选优并给修改意见（save_verdict）", ch, nonAbandoned, form),
 			Reason:  "竞稿：候选稿已齐，待选优",
 			Chapter: ch,
 		}
@@ -263,7 +274,17 @@ func routeContest(s State) *Instruction {
 	if s.VerdictWinner == "" {
 		return nil
 	}
-	// 4. 已提升 → 派中选 writer 润色（Task 文本与候选不同，规避 dedupe）。
+	// 4. 已提升 → 派中选 writer。full 模式润色已提升的候选全文；
+	//    synopsis 模式按中选梗概直接写全章（draft.md 由本任务首次写入）。
+	//    两种文案都必须含"润色"——build.go 的 StopGuardFactory 据此切到 WriterStopGuard（允许 commit）。
+	if s.ContestSynopsis {
+		return &Instruction{
+			Agent:   "writer_" + s.VerdictWinner,
+			Task:    fmt.Sprintf("你的梗概在第 %d 章竞稿胜出。按梗概写出全章正文，按评审意见润色后提交。评审意见：%s", ch, s.VerdictRevisionNotes),
+			Reason:  fmt.Sprintf("竞稿(两段式)：%s 中选，写全章后提交", s.VerdictWinner),
+			Chapter: ch,
+		}
+	}
 	return &Instruction{
 		Agent:   "writer_" + s.VerdictWinner,
 		Task:    fmt.Sprintf("按选优意见润色并提交第 %d 章。选优意见：%s", ch, s.VerdictRevisionNotes),

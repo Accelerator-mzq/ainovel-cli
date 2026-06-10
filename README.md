@@ -2,6 +2,8 @@
 
 全自动 AI 长篇小说创作引擎。Coordinator 在一次 Prompt 里驱动 Architect / Writer / Editor 三个子代理完成整本书的创作，Host 只做启动、恢复和观察。从一句话需求到完整小说，全程无需人工干预。
 
+> 📖 **[使用手册](docs/user-guide.md)** — 面向用户的完整说明书：安装配置 / 写书全流程 / TUI 命令参考 / 配置项全量说明 / 规则定制 / FAQ 排障。本 README 偏架构与设计，想直接上手看手册即可。
+
 <p align="center">
   <img src="scripts/sample.gif" alt="ainovel-cli demo" width="800">
   <img src="scripts/novel.png" alt="ainovel-cli bg" width="800">
@@ -20,6 +22,7 @@
 - **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
 - **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
 - **多人格竞稿** — 配置 ≥2 个作者名后，每章由多个人格各写一稿，Judge 选优并给出修改意见，中选者润色后提交；不配置或 <2 个即退回普通单 Writer 模式，零额外成本
+- **成本预算门禁** — 配置 `budget.max_cost_usd` 后，累计成本达 80% 告警、达上限自动暂停（进度无损，调高上限重启即续写）；不配置零行为变化
 
 ## 架构
 
@@ -418,6 +421,8 @@ output/novel/meta/simulation_profile.json
 ### 候选并发
 
 配置 `writing_contest.concurrency: true` 后，同一章的多个 persona 候选稿并发生成（一次 `subagent(tasks=[...])` 调用，受 agentcore `maxConcurrency=4` 限流），judge 选优、中选稿提升与润色仍串行。某 persona 候选连续失败 3 次自动弃权，候选数减一继续；全部弃权降级为单 Writer。崩溃恢复由磁盘事实（候选槽 / verdict / contest.json）驱动，幂等。
+
+**两段式竞稿（成本优化）**：`writing_contest.mode: "synopsis"` 时候选阶段只写「500-800 字梗概 + 300 字开头试写」，Judge 在梗概层面选优，中选 persona 再写全章正文。全章正文 token 只花一份（约为 full 模式的 1/N），另加一轮梗概竞稿与评审的少量开销，文风与故事走向的差异在梗概阶段已可判别。
 
 ### 去 AI 味与自定义规则
 
