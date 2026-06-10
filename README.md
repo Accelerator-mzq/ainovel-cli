@@ -275,7 +275,7 @@ ainovel-cli
 output/novel/meta/simulation_profile.json
 ```
 
-再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示”画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
+再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示“画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
 
 `./simulate/` 根目录语料生成**主画像**；`./simulate/personas/<作者名>/` 子目录语料生成**竞稿人格画像**（根目录扫描自动排除 `personas/` 子树，两者互不污染）。目录名须与 `writing_contest.personas` 中的作者名完全一致。
 
