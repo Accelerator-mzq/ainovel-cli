@@ -32,7 +32,8 @@ type Prompts struct {
 	ImportFoundation string
 	ImportAnalyzer   string
 	SimulationSource string
-	SimulationMerge  string
+	SimulationMerge       string
+	SimulationPersonaFuse string
 }
 
 // Bundle 表示运行所需的静态资源集合。
@@ -106,7 +107,8 @@ func loadPrompts() Prompts {
 		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
 		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
 		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
-		SimulationMerge:  mustRead(promptsFS, "prompts/simulation-merge.md"),
+		SimulationMerge:       mustRead(promptsFS, "prompts/simulation-merge.md"),
+		SimulationPersonaFuse: mustRead(promptsFS, "prompts/simulation-persona-fuse.md"),
 	}
 }
 
