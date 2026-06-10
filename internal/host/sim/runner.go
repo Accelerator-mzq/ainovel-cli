@@ -53,12 +53,18 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 			return
 		}
 
+		// processedAny 标记是否实际处理过至少一份画像主体（主画像跑过、
+		// 或任一非空人格目录进入 runPersonaProfile，含"已是最新"提前返回）。
+		// 防止"根目录空 + personas/ 全是空子目录"绕过上面的双空检查后误报成功。
+		processedAny := false
+
 		// 主画像：根目录语料（personas/ 子树已被扫描排除）。根目录为空时跳过，
 		// 不影响既有主画像——纯人格语料场景（无主画像竞稿）合法。
 		if len(mainSources) > 0 {
 			if !runMainProfile(ctx, deps, opts, mainSources, emit) {
 				return
 			}
+			processedAny = true
 		}
 
 		// 人格画像：personas/<作者名>/ 各自独立增量，逐个落盘保留部分进度。
@@ -76,7 +82,12 @@ func Run(ctx context.Context, deps Deps, opts Options) (<-chan Event, error) {
 				if !runPersonaProfile(ctx, deps, pc, stored, emit) {
 					return
 				}
+				processedAny = true
 			}
+		}
+		if !processedAny {
+			emit(StageError, 0, 0, "simulate 目录与 personas 子目录均无可分析语料", fmt.Errorf("no simulation sources"))
+			return
 		}
 		emit(StageDone, 0, 0, "仿写画像处理完成", nil)
 	}()
