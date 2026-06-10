@@ -37,7 +37,10 @@ func (t *CommitChapterTool) WithRules(opts rules.LoadOptions) *CommitChapterTool
 // 由于嵌入字段会被 JSON marshaler 提升（promoted），序列化结果等同于扁平结构。
 type commitOutput struct {
 	domain.CommitResult
-	RuleViolations []rules.Violation `json:"rule_violations,omitempty"`
+	RuleViolations       []rules.Violation        `json:"rule_violations,omitempty"`
+	ForeshadowUnknownIDs []string                 `json:"foreshadow_unknown_ids,omitempty"`
+	ForeshadowOverdue    []domain.ForeshadowEntry `json:"foreshadow_overdue,omitempty"`
+	CharacterViolations  []string                 `json:"character_violations,omitempty"`
 }
 
 func (t *CommitChapterTool) Name() string { return "commit_chapter" }
@@ -61,6 +64,7 @@ func (t *CommitChapterTool) Schema() map[string]any {
 		schema.Property("id", schema.String("伏笔 ID")).Required(),
 		schema.Property("action", schema.Enum("操作", "plant", "advance", "resolve")).Required(),
 		schema.Property("description", schema.String("伏笔描述（仅 plant 时必需）")),
+		schema.Property("deadline", schema.Int("建议回收章号（可选；plant 时设置且应大于当前章，advance 时可顺延）")),
 	)
 	relationshipSchema := schema.Object(
 		schema.Property("character_a", schema.String("角色 A")).Required(),
@@ -210,10 +214,13 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			return nil, fmt.Errorf("append timeline: %w: %w", errs.ErrStoreWrite, err)
 		}
 	}
+	var foreshadowUnknown []string
 	if len(a.ForeshadowUpdates) > 0 {
-		if err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates); err != nil {
+		unknown, err := t.store.World.UpdateForeshadow(a.Chapter, a.ForeshadowUpdates)
+		if err != nil {
 			return nil, fmt.Errorf("update foreshadow: %w: %w", errs.ErrStoreWrite, err)
 		}
+		foreshadowUnknown = unknown
 	}
 	if len(a.RelationshipChanges) > 0 {
 		for i := range a.RelationshipChanges {
@@ -238,6 +245,33 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		coreNames := loadCoreCharacterNameSet(t.store)
 		if err := t.store.Cast.MergeAppearances(a.Chapter, a.Characters, a.CastIntros, coreNames); err != nil {
 			slog.Warn("配角名册累加失败，跳过", "module", "commit", "chapter", a.Chapter, "err", err)
+		}
+	}
+
+	// 4c. 角色硬状态对照：本章出场角色若最新状态为死亡且死于更早章节，返回事实告警。
+	// 仅返事实不阻断（铁律一）：误报场景（闪回/回忆）由 editor 语义评审豁免。
+	// 注意本步在 4 之后执行：本章 state_changes 已落盘，"本章复活"会使最新状态非死亡而自动豁免。
+	// 死亡判定在 fold 前先归一别名（DeadEntitiesNormalized），覆盖"别名死亡+正名复活"的跨名豁免；
+	// 机械检查保守（宁漏不误），闪回/回忆等语义误报场景仍由 editor 七维评审兜底。
+	var characterViolations []string
+	if len(a.Characters) > 0 {
+		if changes, _ := t.store.World.LoadStateChanges(); len(changes) > 0 {
+			// fold 前归一化：别名死亡+正名复活也能正确豁免
+			alias := loadAliasToCanonical(t.store)
+			dead := domain.DeadEntitiesNormalized(changes, alias, a.Chapter)
+			if len(dead) > 0 {
+				for _, name := range a.Characters {
+					// 出场名同样折算正名后比对
+					canon := name
+					if c, ok := alias[name]; ok {
+						canon = c
+					}
+					if ch, ok := dead[canon]; ok {
+						characterViolations = append(characterViolations,
+							fmt.Sprintf("角色「%s」已于第 %d 章记录死亡，本章仍出场（若为闪回/复活请补 state_changes 修正）", canon, ch))
+					}
+				}
+			}
 		}
 	}
 
@@ -339,7 +373,25 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 
 	// 11. 机械规则检查（仅返事实，不阻断；rulesOpts 未配置时返 nil）
 	violations := t.checkRules(content, wordCount)
-	return json.Marshal(commitOutput{CommitResult: result, RuleViolations: violations})
+
+	// 12. 伏笔事实：逾期清单（deadline 已过仍未回收）。读失败不阻断 commit，仅缺该事实。
+	// 过滤本章刚 plant 的条目：deadline 误填为不大于当前章时，不应在埋设当章立即报逾期。
+	var overdueFs []domain.ForeshadowEntry
+	if active, ferr := t.store.World.LoadActiveForeshadow(); ferr == nil {
+		for _, f := range domain.OverdueForeshadow(active, a.Chapter) {
+			if f.PlantedAt == a.Chapter {
+				continue
+			}
+			overdueFs = append(overdueFs, f)
+		}
+	}
+	return json.Marshal(commitOutput{
+		CommitResult:         result,
+		RuleViolations:       violations,
+		ForeshadowUnknownIDs: foreshadowUnknown,
+		ForeshadowOverdue:    overdueFs,
+		CharacterViolations:  characterViolations,
+	})
 }
 
 // checkRules 加载用户规则并对给定章节正文做机械检查。
@@ -576,4 +628,21 @@ func (t *CommitChapterTool) layeredBookComplete(progress *domain.Progress) bool 
 		return false
 	}
 	return true
+}
+
+// loadAliasToCanonical 构建 别名→正名 映射；加载失败返回 nil（按原名匹配）。
+func loadAliasToCanonical(s *store.Store) map[string]string {
+	chars, err := s.Characters.Load()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, c := range chars {
+		for _, alias := range c.Aliases {
+			if alias != "" && c.Name != "" {
+				m[alias] = c.Name
+			}
+		}
+	}
+	return m
 }

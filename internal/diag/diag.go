@@ -39,11 +39,13 @@ var allRules = []RuleFunc{
 	WordCountAnomaly,
 	// Planning
 	StaleForeshadow,
+	ForeshadowOverdue,
 	CompassDrift,
 	OutlineExhausted,
 	MissingSummaries,
 	// Context
 	GhostCharacter,
+	DeadCharacterAppears,
 	TimelineGaps,
 	RelationshipStagnation,
 }

@@ -130,6 +130,9 @@ type Config struct {
 
 	// 多人格竞稿配置；为空或 personas < 2 时退回单 Writer 行为（完全向后兼容）。
 	WritingContest WritingContest `json:"writing_contest,omitempty"`
+
+	// 全书成本预算；MaxCostUSD<=0 视为未启用（完全向后兼容）。
+	Budget Budget `json:"budget,omitempty"`
 }
 
 // WritingContest 多人格竞稿配置。
@@ -142,6 +145,14 @@ type WritingContest struct {
 	// Concurrency=true 时候选生成阶段并发（一次 parallel subagent 调用）；
 	// 缺省/false 为串行（逐个补齐，现状行为）。personas<2 时此开关无意义。
 	Concurrency bool `json:"concurrency,omitempty"`
+	// Mode 竞稿模式：""/"full"（默认，候选写全章）或 "synopsis"（两段式：候选只写
+	// 梗概+开头试写，中选后由该 persona 写全章。token 成本约降为 full 模式的 1/N）。
+	Mode string `json:"mode,omitempty"`
+}
+
+// SynopsisMode 报告是否启用两段式（梗概竞稿）。未知值按 full 处理。
+func (w WritingContest) SynopsisMode() bool {
+	return strings.EqualFold(strings.TrimSpace(w.Mode), "synopsis")
 }
 
 // Normalize 去空白、去重、保序，返回规整后的副本。
@@ -159,11 +170,30 @@ func (w WritingContest) Normalize() WritingContest {
 		seen[p] = struct{}{}
 		out = append(out, p)
 	}
-	return WritingContest{Personas: out, Judge: w.Judge, Concurrency: w.Concurrency}
+	return WritingContest{Personas: out, Judge: w.Judge, Concurrency: w.Concurrency, Mode: w.Mode}
 }
 
 // Enabled 报告是否启用竞稿（至少 2 个 persona）。
 func (w WritingContest) Enabled() bool { return len(w.Personas) >= 2 }
+
+// Budget 全书成本预算配置。累计成本（meta/usage.json 口径）达 WarnRatio 比例时告警，
+// 达到 MaxCostUSD 后 Host 拒绝派发新指令并暂停运行（in-flight 子代理自然完成，不强杀）。
+type Budget struct {
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"` // 美元上限；<=0 未启用
+	WarnRatio  float64 `json:"warn_ratio,omitempty"`   // 告警阈值比例 (0,1)，默认 0.8
+}
+
+// Enabled 报告预算门禁是否启用。
+func (b Budget) Enabled() bool { return b.MaxCostUSD > 0 }
+
+// WarnUSD 返回告警线金额；WarnRatio 非法时回落默认 0.8。
+func (b Budget) WarnUSD() float64 {
+	r := b.WarnRatio
+	if r <= 0 || r >= 1 {
+		r = 0.8
+	}
+	return b.MaxCostUSD * r
+}
 
 // ValidateBase 校验基础配置。
 func (c *Config) ValidateBase() error {
