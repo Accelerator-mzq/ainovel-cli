@@ -40,12 +40,32 @@ type ContextTool struct {
 	refs      References
 	style     string
 	rulesOpts rules.LoadOptions
+	// profileSource 可选覆盖 simulation_profile 的来源（竞稿写手注入各自融合画像）；
+	// nil 时走 store.Simulation.Load()（主画像，所有非竞稿角色的共享实例）。
+	profileSource func() (*domain.SimulationProfile, error)
 }
 
 // NewContextTool 创建上下文工具。rulesOpts 控制 user_rules 的加载来源；
 // 空 LoadOptions 仍然安全，loader 会跳过所有未配置的来源，user_rules 注入空 Bundle。
 func NewContextTool(store *store.Store, refs References, style string, rulesOpts rules.LoadOptions) *ContextTool {
 	return &ContextTool{store: store, refs: refs, style: style, rulesOpts: rulesOpts}
+}
+
+// WithProfileSource 返回一个 simulation_profile 来源被覆盖的浅拷贝实例。
+// 竞稿装配用：每个竞稿写手持有专属实例，注入各自的融合画像（运行期单信号）；
+// 原实例不受影响（其余角色继续读主画像）。
+func (t *ContextTool) WithProfileSource(fn func() (*domain.SimulationProfile, error)) *ContextTool {
+	c := *t
+	c.profileSource = fn
+	return &c
+}
+
+// loadSimulationProfile 按注入源或主画像读取 simulation_profile。
+func (t *ContextTool) loadSimulationProfile() (*domain.SimulationProfile, error) {
+	if t.profileSource != nil {
+		return t.profileSource()
+	}
+	return t.store.Simulation.Load()
 }
 
 func (t *ContextTool) Name() string { return "novel_context" }
