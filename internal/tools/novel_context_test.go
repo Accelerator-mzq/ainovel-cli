@@ -622,3 +622,20 @@ func containsRecallSummary(items []domain.RecallItem, want string) bool {
 	}
 	return false
 }
+
+// TestNovelContext_UserSettingsInjected 验证 Architect 路径注入用户设定全文。
+func TestNovelContext_UserSettingsInjected(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Settings.SaveUserSettings("## 文件：境界.md\n\n练气→筑基"); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewContextTool(s, References{}, "default", rules.LoadOptions{})
+	raw, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user_settings 在 foundation envelope 下，断言值包含"练气→筑基"
+	if !strings.Contains(string(raw), "练气→筑基") {
+		t.Fatalf("architect 路径未注入 user_settings: %s", raw)
+	}
+}

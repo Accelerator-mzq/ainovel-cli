@@ -601,6 +601,13 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 	} else {
 		warn("foreshadow_ledger", err)
 	}
+	// 用户外部设定文档：最高优先级的规划依据。不进 trimByBudget 的 trimOrder
+	//（永不裁剪），体量已在收集端（CollectUserSettings）限制。
+	if settings, err := t.store.Settings.LoadUserSettings(); err == nil && settings != "" {
+		envelope.Foundation["user_settings"] = settings
+	} else {
+		warn("user_settings", err)
+	}
 	envelope.Foundation["foundation_status"] = t.foundationStatus()
 }
 
