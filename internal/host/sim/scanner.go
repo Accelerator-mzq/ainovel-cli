@@ -103,11 +103,23 @@ func scanSources(root string) ([]scannedSource, error) {
 // personas/ 不存在返回 nil, nil；空子目录也会返回（Sources 为空），由调用方告警跳过。
 func scanPersonaDirs(root string) ([]personaCorpus, error) {
 	personasRoot := filepath.Join(strings.TrimSpace(root), personasDirName)
-	entries, err := os.ReadDir(personasRoot)
+	// 先 Stat 拦截"不存在/是文件"两种场景，保证跨平台行为一致：
+	// POSIX 上 os.ReadDir 对普通文件报 ENOTDIR（非 NotExist），若直接 ReadDir
+	// 会在 POSIX 报错而 Windows 静默放过，必须在 Stat 层统一拦截。
+	info, err := os.Stat(personasRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		// personas 是普通文件，视作无人格语料
+		return nil, nil
+	}
+	entries, err := os.ReadDir(personasRoot)
+	if err != nil {
+		// Stat 已确认是目录，此处错误为真实 IO 错误，直接返回
 		return nil, err
 	}
 	var out []personaCorpus

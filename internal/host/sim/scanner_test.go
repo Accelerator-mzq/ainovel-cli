@@ -65,6 +65,23 @@ func TestScanPersonaDirs(t *testing.T) {
 	}
 }
 
+// personas 是普通文件（非目录）时应跨平台一致返回 nil, nil。
+// POSIX 上 os.ReadDir 对文件报 ENOTDIR（非 NotExist），若不在 Stat 层拦截会误报错中止流程。
+func TestScanPersonaDirsPersonasIsFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "personas"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs, err := scanPersonaDirs(root)
+	if err != nil {
+		t.Fatalf("personas 为文件时不应报错: %v", err)
+	}
+	if dirs != nil {
+		t.Fatalf("应返回 nil，got %+v", dirs)
+	}
+}
+
 // personas/ 目录不存在时返回 nil, nil（纯主画像场景）。
 func TestScanPersonaDirsMissing(t *testing.T) {
 	dirs, err := scanPersonaDirs(t.TempDir())
