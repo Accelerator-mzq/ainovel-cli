@@ -103,6 +103,14 @@ func EnsureFused(ctx context.Context, st *store.Store, authors []string, fuse Fu
 		} else if syn, ferr := fuse(ctx, base, &pp); ferr != nil || syn == nil {
 			prof := pp
 			resolved = Resolved{Author: author, Slug: slug, Profile: &prof, Fallback: true}
+			// ctx 取消/超时：剩余 author 的 fuse 全部立即失败属于"从未真正尝试"，
+			// 不写 Fallback 进缓存（保留旧条目，避免把取消误持久化为融合失败），
+			// 但 out 仍补全兜底结果——build.go 注册的 writer 数必须与
+			// host.go SetContest 的 slug 数对齐，下次启动自动重试。
+			if ctx.Err() != nil {
+				out = append(out, resolved)
+				continue
+			}
 		} else {
 			fused := domain.SimulationProfile{
 				Version:   domain.SimulationProfileVersion,

@@ -125,6 +125,46 @@ func TestEnsureFusedCachesAndInvalidates(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("主画像更新后融合调用 = %d, want 2", calls)
 	}
+
+	// 人格画像更新 → 仅该条目失效重融合（对称覆盖 PersonaStamp 分支 + 部分失效语义）
+	seedPersonaProfile(t, st, "乌贼", "p-t2")
+	calls = 0
+	if _, err := EnsureFused(context.Background(), st, authors, countingFuse(&calls, nil)); err != nil {
+		t.Fatalf("人格画像更新后 EnsureFused: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("人格画像更新后融合调用 = %d, want 1（仅乌贼失效）", calls)
+	}
+}
+
+// ctx 取消/超时：fuse 立即失败属于"从未真正尝试"，不得把 Fallback 持久化进缓存
+// （否则污染缓存与日志）；但 out 必须仍包含全部 authors，保证 build.go 注册的
+// writer 数与 host.go SetContest 的 slug 数对齐。
+func TestEnsureFusedCtxCanceledSkipsCacheWrite(t *testing.T) {
+	st := newTestStore(t)
+	seedBaseProfile(t, st, "base-t1")
+	seedPersonaProfile(t, st, "乌贼", "p-t1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 模拟启动期超时/取消：fuse 立即返回 ctx.Err()
+	out, err := EnsureFused(ctx, st, []string{"乌贼"}, func(ctx context.Context, _, _ *domain.SimulationProfile) (*domain.SimulationSynthesis, error) {
+		return nil, ctx.Err()
+	})
+	if err != nil {
+		t.Fatalf("ctx 取消应兜底不阻断: %v", err)
+	}
+	// out 完整：长度 1 且标记 Fallback 兜底
+	if len(out) != 1 || !out[0].Fallback {
+		t.Fatalf("out 应包含全部 authors 且标记 Fallback: %+v", out)
+	}
+	// 缓存无写入："未真正尝试"不得持久化为"融合失败"
+	cache, cerr := st.Simulation.LoadFusedProfiles()
+	if cerr != nil {
+		t.Fatalf("LoadFusedProfiles: %v", cerr)
+	}
+	if len(cache) != 0 {
+		t.Fatalf("ctx 取消不应写缓存，得到 %d 条: %+v", len(cache), cache)
+	}
 }
 
 // 无主画像：退化为人格画像本身，不调融合。
