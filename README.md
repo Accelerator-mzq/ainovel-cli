@@ -275,7 +275,9 @@ ainovel-cli
 output/novel/meta/simulation_profile.json
 ```
 
-再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示“画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
+再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示”画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
+
+`./simulate/` 根目录语料生成**主画像**；`./simulate/personas/<作者名>/` 子目录语料生成**竞稿人格画像**（根目录扫描自动排除 `personas/` 子树，两者互不污染）。目录名须与 `writing_contest.personas` 中的作者名完全一致。
 
 也可以导入之前生成的画像，避免重复分析同一批文章：
 
@@ -408,7 +410,7 @@ output/novel/meta/simulation_profile.json
 
 工作流程：每章写作时，系统为每个 persona 各调用一次 Writer，生成对应文风的候选稿；随后 Judge 子代理评分并选出最优稿，附上修改意见；中选 Writer 按意见润色后提交终稿。
 
-- **文风来源** — 启动时由 LLM 根据作者名自动生成并缓存到 `personas.json`，全书写作期间保持稳定，不会因恢复而重新生成
+- **文风来源** — 每位作者的人格画像由真实语料生成：把作品语料放入 `./simulate/personas/<作者名>/` 并运行 `/simulate`；启动时与主画像融合为该写手的专属文风约束（缓存于 `meta/contest_fused_profiles.json`，语料或主画像更新后自动重融合）。缺任一人格画像时竞稿整体禁用，启动日志会列出缺失项，修好后重启生效
 - **成本** — 串行执行，写作开销约为 persona 数量的倍数
 - **向下兼容** — 不配置该字段、或 `personas` 少于 2 个时，退回普通单 Writer 模式，行为与旧版完全一致
 - **judge 字段** — 当前预留，暂复用 `editor` 模型，配置不生效
