@@ -410,7 +410,7 @@ output/novel/meta/simulation_profile.json
 
 工作流程：每章写作时，系统为每个 persona 各调用一次 Writer，生成对应文风的候选稿；随后 Judge 子代理评分并选出最优稿，附上修改意见；中选 Writer 按意见润色后提交终稿。
 
-- **文风来源** — 每位作者的人格画像由真实语料生成：把作品语料放入 `./simulate/personas/<作者名>/` 并运行 `/simulate`；启动时与主画像融合为该写手的专属文风约束（缓存于 `meta/contest_fused_profiles.json`，语料或主画像更新后自动重融合）。缺任一人格画像时竞稿整体禁用，启动日志会列出缺失项，修好后重启生效
+- **文风来源** — 每位作者的人格画像由真实语料生成：把作品语料放入 `./simulate/personas/<作者名>/` 并运行 `/simulate`；启动时与主画像融合为该写手的专属文风约束（缓存于 `meta/contest_fused_profiles.json`，语料或主画像更新后自动重融合）。缺任一人格画像时竞稿整体禁用，启动日志会列出缺失项，修好后重启生效。旧版 `contest/personas.json`（StyleBlock 缓存）已废弃，可手动删除
 - **成本** — 串行执行，写作开销约为 persona 数量的倍数
 - **向下兼容** — 不配置该字段、或 `personas` 少于 2 个时，退回普通单 Writer 模式，行为与旧版完全一致
 - **judge 字段** — 当前预留，暂复用 `editor` 模型，配置不生效
