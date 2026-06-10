@@ -6,8 +6,20 @@
 
 ## 1. reasoning（thinking）模型在多轮 tool-calling 下不可用
 
-**状态**：待修（框架层 `voocel/litellm` / `voocel/agentcore`）
+**状态**：✅ 已修复（2026-06-10 确认，随依赖升级 agentcore v1.6.12 + litellm v1.6.16 修复）
 **发现于**：2026-06-03，多人格竞稿功能（PR #1）真实 LLM 端到端测试
+
+### 修复说明（2026-06-10）
+
+- `agentcore@v1.6.12 llm/litellm.go:489-499`：多轮回放时把上一轮 assistant 的 thinking 内容
+  显式转发为 `reasoning_content`（注释点名 DeepSeek/GLM/Qwen/Mimo 等 reasoning-aware provider）。
+- `litellm@v1.6.16 providers/deepseek.go`：`ReasoningField: "reasoning_content"` +
+  `ThinkingMapper`（thinking enabled/disabled 请求映射）。
+- thinking 模型现可用作 coordinator/architect/writer/editor。注意取舍：thinking token 按输出
+  计费且多轮长循环时延明显增加，写作场景默认关闭仍是合理选择（DeepSeek V4 在 provider 的
+  `extra_body` 配 `{"thinking":{"type":"disabled"}}`；V4 默认 enabled）。
+
+以下为历史记录，保留备查。
 
 ### 现象
 
