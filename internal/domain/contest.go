@@ -1,14 +1,5 @@
 package domain
 
-// Persona 描述一个写作人格：源作者名 + LLM 生成的文风 block。
-type Persona struct {
-	Slug       string `json:"slug"`        // 稳定标识，用于工具路径与 agent 命名（如 wuzei）
-	Author     string `json:"author"`      // 用户填写的作者名（如 乌贼）
-	StyleBlock string `json:"style_block"` // LLM 生成的文风 prompt 片段
-	Model      string `json:"model"`       // 生成该 block 的模型名（便于追溯）
-	Fallback   bool   `json:"fallback"`    // true 表示 LLM 生成失败、用了通用兜底文案
-}
-
 // PersonaScore 是 Judge 对单个候选稿的评分。
 type PersonaScore struct {
 	Persona string  `json:"persona"`
