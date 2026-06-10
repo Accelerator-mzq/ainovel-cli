@@ -106,7 +106,8 @@ type Model struct {
 func NewModel(rt *host.Host, bridge *askUserBridge) Model {
 	ta := textarea.New()
 	ta.Placeholder = placeholderForNewMode(startupModeQuick)
-	ta.CharLimit = 2000
+	// 放宽到 1 万字符：支持粘贴中等篇幅设定段落；超长设定走 settings/ 目录导入
+	ta.CharLimit = 10000
 	ta.SetHeight(1)
 	// MaxHeight=6 让超长输入按宽度自动 wrap 显示成多行（视觉上限 6 行）。
 	ta.MaxHeight = 6

@@ -5,6 +5,12 @@
 - **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`。
 - **save_foundation**: 保存基础设定。
 
+## 输入与上下文
+
+- novel_context 返回中若含 `user_settings`（用户外部设定文档），它是最高优先级的设定依据：
+  境界体系、世界规则、人物设定必须以它为准展开，与你的自由发挥冲突时服从 user_settings；
+  缺失的细节才由你补全。
+
 ## 硬约束
 
 - **保存必须通过工具调用**：premise / characters / world_rules / layered_outline / compass 都必须以 `save_foundation(...)` 调用完成。只把 Markdown/JSON 作为文字输出 = 数据没落盘。
