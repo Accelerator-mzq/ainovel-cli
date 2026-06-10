@@ -217,6 +217,106 @@ func validSourceReportJSON(summary string) string {
 }`, summary)
 }
 
+// 只有人格语料、根目录为空：应生成人格画像而不生成主画像（无主画像场景合法）。
+// 重跑时按指纹增量，0 次 LLM 调用。
+func TestRunnerGeneratesPersonaProfiles(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "simulate")
+	personaDir := filepath.Join(sourceDir, "personas", "乌贼")
+	if err := os.MkdirAll(personaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(personaDir, "sample.txt"), []byte("persona corpus"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := store.NewStore(filepath.Join(dir, "output", "novel"))
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{responses: []string{
+		validSourceReportJSON("persona tone"),
+		validSynthesisJSON("persona synthesis"),
+	}}
+	drainRun(t, st, llm, sourceDir)
+	if got := llm.calls.Load(); got != 2 {
+		t.Fatalf("人格画像生成 LLM 调用 = %d, want 2（1 analyze + 1 merge）", got)
+	}
+
+	profiles, err := st.Simulation.LoadPersonaProfiles()
+	if err != nil {
+		t.Fatalf("LoadPersonaProfiles: %v", err)
+	}
+	p, ok := profiles["乌贼"]
+	if !ok || len(p.Corpus.Sources) != 1 {
+		t.Fatalf("人格画像未生成或语料数错误: %+v", profiles)
+	}
+	// 主画像不应被人格语料污染
+	main, err := st.Simulation.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if main != nil {
+		t.Fatalf("根目录无语料，主画像不应生成: %+v", main)
+	}
+
+	// 重跑：指纹未变，0 次调用
+	llm2 := &scriptedLLM{}
+	drainRun(t, st, llm2, sourceDir)
+	if got := llm2.calls.Load(); got != 0 {
+		t.Fatalf("增量重跑 LLM 调用 = %d, want 0", got)
+	}
+}
+
+// 空人格目录：告警跳过（等同缺画像），主画像照常生成。
+func TestRunnerSkipsEmptyPersonaDir(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "simulate")
+	if err := os.MkdirAll(filepath.Join(sourceDir, "personas", "空人格"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "a.txt"), []byte("main corpus"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := store.NewStore(filepath.Join(dir, "output", "novel"))
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedLLM{responses: []string{
+		validSourceReportJSON("main tone"),
+		validSynthesisJSON("main synthesis"),
+	}}
+	events, err := Run(context.Background(), Deps{
+		Store:   st,
+		LLM:     llm,
+		Prompts: Prompts{Source: "source prompt", Merge: "merge prompt"},
+	}, Options{SourceDir: sourceDir})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var sawEmptyWarn bool
+	for ev := range events {
+		if ev.Err != nil {
+			t.Fatalf("simulate errored: %v", ev.Err)
+		}
+		if strings.Contains(ev.Message, "目录为空") {
+			sawEmptyWarn = true
+		}
+	}
+	if !sawEmptyWarn {
+		t.Fatal("空人格目录应产生'目录为空'跳过提示")
+	}
+	main, _ := st.Simulation.Load()
+	if main == nil || len(main.Corpus.Sources) != 1 {
+		t.Fatalf("主画像应照常生成: %+v", main)
+	}
+	profiles, _ := st.Simulation.LoadPersonaProfiles()
+	if len(profiles) != 0 {
+		t.Fatalf("空目录不应生成人格画像: %+v", profiles)
+	}
+}
+
 func validSynthesisJSON(note string) string {
 	return fmt.Sprintf(`{
   "style": {
