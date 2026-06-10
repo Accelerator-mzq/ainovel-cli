@@ -171,14 +171,18 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		} else if files > 0 {
 			// 合并保留共创原文段：CollectUserSettings 只含 settings/ 文件内容，
 			// 直接全量覆盖会冲掉 Ctrl+S 落盘的共创对话原文（Resume 不会重放 Append）。
-			if existing, lerr := store.Settings.LoadUserSettings(); lerr == nil {
-				content = mergeSettingsPreservingCocreate(content, existing)
-			}
-			if werr := store.Settings.SaveUserSettings(content); werr != nil {
-				slog.Warn("用户设定落盘失败", "module", "boot", "err", werr)
+			// 读已有内容失败时跳过本次同步——读失败但写成功会覆盖丢失共创段，宁可不更新。
+			existing, lerr := store.Settings.LoadUserSettings()
+			if lerr != nil {
+				slog.Warn("读取已有用户设定失败，跳过本次设定同步", "module", "boot", "err", lerr)
 			} else {
-				h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
-					Summary: fmt.Sprintf("已加载用户设定：%d 个文件，共 %d 字", files, len([]rune(content)))})
+				content = mergeSettingsPreservingCocreate(content, existing)
+				if werr := store.Settings.SaveUserSettings(content); werr != nil {
+					slog.Warn("用户设定落盘失败", "module", "boot", "err", werr)
+				} else {
+					h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
+						Summary: fmt.Sprintf("已加载用户设定：%d 个文件，共 %d 字", files, len([]rune(content)))})
+				}
 			}
 		}
 	}
