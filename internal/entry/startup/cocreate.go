@@ -134,6 +134,24 @@ func (s *CoCreateSession) InitialInput() string {
 	return strings.TrimSpace(s.history[0].Content)
 }
 
+// UserTranscript 返回共创对话里全部用户原文（按轮次拼接），
+// 供 Ctrl+S 后追加落盘到 user_settings.md——草稿是有损压缩，原文必须保全。
+func (s *CoCreateSession) UserTranscript() string {
+	if s == nil {
+		return ""
+	}
+	var b strings.Builder
+	idx := 0
+	for _, m := range s.history {
+		if strings.ToLower(strings.TrimSpace(m.Role)) != "user" {
+			continue
+		}
+		idx++
+		fmt.Fprintf(&b, "### 用户输入 %d\n\n%s\n\n", idx, strings.TrimSpace(m.Content))
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func (s *CoCreateSession) BuildPlan() (Plan, error) {
 	if s == nil || !s.CanStart() {
 		return Plan{}, fmt.Errorf("cocreate draft prompt is required")
@@ -142,5 +160,6 @@ func (s *CoCreateSession) BuildPlan() (Plan, error) {
 		Mode:        ModeCoCreate,
 		DisplayName: "共创规划",
 		StartPrompt: host.BuildStartPrompt(s.DraftPrompt()),
+		UserNotes:   s.UserTranscript(),
 	}, nil
 }

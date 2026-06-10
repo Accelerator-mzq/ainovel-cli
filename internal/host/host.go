@@ -155,6 +155,22 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
 	}
 
+	// 同步用户设定：启动目录 settings/ 有内容时全文落盘 user_settings.md，
+	// 由 novel_context 的 Architect 路径注入。目录缺失/为空时保留已有落盘内容
+	//（设定一旦进书就是书的一部分，删源目录不应清空）。
+	if cwd, cerr := os.Getwd(); cerr == nil {
+		if content, files, serr := CollectUserSettings(cwd); serr != nil {
+			slog.Warn("用户设定收集失败", "module", "boot", "err", serr)
+		} else if files > 0 {
+			if werr := store.Settings.SaveUserSettings(content); werr != nil {
+				slog.Warn("用户设定落盘失败", "module", "boot", "err", werr)
+			} else {
+				h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
+					Summary: fmt.Sprintf("已加载用户设定：%d 个文件，共 %d 字", files, len([]rune(content)))})
+			}
+		}
+	}
+
 	return h, nil
 }
 

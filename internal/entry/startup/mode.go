@@ -37,6 +37,9 @@ type Plan struct {
 	DisplayName string
 	StartPrompt string
 	ResumeOnly  bool
+	// UserNotes 保存共创模式下对话中全部用户原文，Ctrl+S 后落盘到 user_settings.md。
+	// 草稿（DraftPrompt）是有损压缩，原文必须保全。
+	UserNotes string
 }
 
 // ErrNotImplemented 标记占位策略尚未落地。
