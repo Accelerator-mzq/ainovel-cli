@@ -11,11 +11,33 @@ import (
 )
 
 // settings 收集体量上限：单文件 / 全部合计（rune 计）。
-// 超限截断并标注——上限取 Architect 上下文预算（novel_context trim 60KB）的安全余量。
+// 超限截断并标注——这是落盘存档的体量保护（防止超大文件撑爆 user_settings.md），
+// 不是 Architect 上下文预算；注入预算由 novel_context 注入端字节兜底负责。
 const (
 	maxSettingsFileRunes  = 30000
 	maxSettingsTotalRunes = 60000
 )
+
+// cocreateSectionHeader 共创原文段的标记头，New 同步与 Append 共用。
+const cocreateSectionHeader = "# 共创对话用户原文（备查）"
+
+// extractCocreateSection 从已落盘内容中切出共创原文段；无则返回空串。
+func extractCocreateSection(existing string) string {
+	if idx := strings.Index(existing, cocreateSectionHeader); idx >= 0 {
+		return strings.TrimSpace(existing[idx:])
+	}
+	return ""
+}
+
+// mergeSettingsPreservingCocreate 把新收集的 settings/ 内容与已落盘内容合并：
+// 保留已有的共创原文段。重启续写时 CollectUserSettings 只含 settings/ 文件内容，
+// 直接覆盖会把 Ctrl+S 落盘的共创对话原文永久冲掉（Resume 路径不会重放 Append）。
+func mergeSettingsPreservingCocreate(collected, existing string) string {
+	if section := extractCocreateSection(existing); section != "" {
+		return collected + "\n\n" + section
+	}
+	return collected
+}
 
 // settingsExts 允许的设定文件扩展名（与 /simulate 的语料口径一致）。
 var settingsExts = map[string]bool{".md": true, ".txt": true, ".markdown": true}
@@ -85,16 +107,20 @@ func (h *Host) AppendCoCreateTranscript(transcript string) {
 	if transcript == "" {
 		return
 	}
+	// 体量上限：与单文件上限同口径（30000 rune），防止超长对话旁路撑爆存档。
+	if runes := []rune(transcript); len(runes) > maxSettingsFileRunes {
+		transcript = string(runes[:maxSettingsFileRunes]) + "\n\n（共创原文超长已截断）"
+	}
 	existing, err := h.store.Settings.LoadUserSettings()
 	if err != nil {
 		slog.Warn("读取已有用户设定失败，跳过共创原文保全", "module", "boot", "err", err)
 		return
 	}
-	section := "# 共创对话用户原文（备查）\n\n" + transcript
+	section := cocreateSectionHeader + "\n\n" + transcript
 	merged := section
 	if strings.TrimSpace(existing) != "" {
 		// 去重：重复 Ctrl+S（重开同名书）时替换旧的共创段而不是无限追加
-		if idx := strings.Index(existing, "# 共创对话用户原文（备查）"); idx >= 0 {
+		if idx := strings.Index(existing, cocreateSectionHeader); idx >= 0 {
 			existing = strings.TrimSpace(existing[:idx])
 		}
 		if existing != "" {

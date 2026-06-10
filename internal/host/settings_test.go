@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	storepkg "github.com/Accelerator-mzq/ainovel-cli/internal/store"
 )
 
 // TestCollectUserSettings 验证 settings/ 目录扫描：递归、按路径排序、文件头分隔、忽略非文本扩展。
@@ -46,6 +48,54 @@ func TestCollectUserSettings(t *testing.T) {
 	content, files, err = CollectUserSettings(t.TempDir())
 	if err != nil || content != "" || files != 0 {
 		t.Fatalf("missing dir: %q %d %v", content, files, err)
+	}
+}
+
+// TestMergeSettingsPreservingCocreate 验证重启同步时共创原文段不被冲掉（C1 回归）。
+func TestMergeSettingsPreservingCocreate(t *testing.T) {
+	existing := "## 文件：旧设定.md\n\n旧内容\n\n" + cocreateSectionHeader + "\n\n### 用户输入 1\n\n设定A原文"
+	merged := mergeSettingsPreservingCocreate("## 文件：新设定.md\n\n新内容", existing)
+	if !strings.Contains(merged, "新内容") {
+		t.Fatalf("缺新收集内容：%q", merged)
+	}
+	if !strings.Contains(merged, "设定A原文") || !strings.Contains(merged, cocreateSectionHeader) {
+		t.Fatalf("共创原文段被冲掉：%q", merged)
+	}
+	if strings.Contains(merged, "旧内容") {
+		t.Fatalf("旧 settings 段应被新收集内容替换：%q", merged)
+	}
+	// 无共创段时原样返回新内容
+	if got := mergeSettingsPreservingCocreate("新内容", "只有旧设定"); got != "新内容" {
+		t.Fatalf("无共创段应原样返回：%q", got)
+	}
+}
+
+// TestAppendCoCreateTranscript_CapAndDedup 验证共创原文体量上限与重复 Ctrl+S 幂等替换。
+func TestAppendCoCreateTranscript_CapAndDedup(t *testing.T) {
+	h := &Host{store: storepkg.NewStore(t.TempDir())}
+
+	// 超长 transcript 截断并标注
+	long := strings.Repeat("创", maxSettingsFileRunes+100)
+	h.AppendCoCreateTranscript(long)
+	got, err := h.store.Settings.LoadUserSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "（共创原文超长已截断）") {
+		t.Fatal("超长共创原文应截断并标注")
+	}
+	if n := len([]rune(got)); n > maxSettingsFileRunes+200 {
+		t.Fatalf("截断未生效，len=%d", n)
+	}
+
+	// 重复调用幂等替换：新内容覆盖旧共创段，不无限追加
+	h.AppendCoCreateTranscript("第二次原文")
+	got, _ = h.store.Settings.LoadUserSettings()
+	if !strings.Contains(got, "第二次原文") || strings.Contains(got, "创创创") {
+		t.Fatalf("重复 Ctrl+S 应替换旧共创段：%q", got)
+	}
+	if strings.Count(got, cocreateSectionHeader) != 1 {
+		t.Fatalf("共创段标记头应只出现一次：%q", got)
 	}
 }
 
