@@ -23,15 +23,15 @@ var rulesFS embed.FS
 
 // Prompts 表示嵌入的提示词集合。
 type Prompts struct {
-	Coordinator      string
-	ArchitectShort   string
-	ArchitectLong    string
-	Writer           string
-	Editor           string
-	Judge            string
-	ImportFoundation string
-	ImportAnalyzer   string
-	SimulationSource string
+	Coordinator           string
+	ArchitectShort        string
+	ArchitectLong         string
+	Writer                string
+	Editor                string
+	Judge                 string
+	ImportFoundation      string
+	ImportAnalyzer        string
+	SimulationSource      string
 	SimulationMerge       string
 	SimulationPersonaFuse string
 }
@@ -98,15 +98,15 @@ func loadReferences(style string) tools.References {
 
 func loadPrompts() Prompts {
 	return Prompts{
-		Coordinator:      withSimulationGuidance(mustRead(promptsFS, "prompts/coordinator.md"), "coordinator"),
-		ArchitectShort:   withSimulationGuidance(mustRead(promptsFS, "prompts/architect-short.md"), "architect"),
-		ArchitectLong:    withSimulationGuidance(mustRead(promptsFS, "prompts/architect-long.md"), "architect"),
-		Writer:           withSimulationGuidance(mustRead(promptsFS, "prompts/writer.md"), "writer"),
-		Editor:           withSimulationGuidance(mustRead(promptsFS, "prompts/editor.md"), "editor"),
-		Judge:            mustRead(promptsFS, "prompts/judge.md"),
-		ImportFoundation: mustRead(promptsFS, "prompts/import-foundation.md"),
-		ImportAnalyzer:   mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
-		SimulationSource: mustRead(promptsFS, "prompts/simulation-source.md"),
+		Coordinator:           withSimulationGuidance(mustRead(promptsFS, "prompts/coordinator.md"), "coordinator"),
+		ArchitectShort:        withSimulationGuidance(mustRead(promptsFS, "prompts/architect-short.md"), "architect"),
+		ArchitectLong:         withSimulationGuidance(mustRead(promptsFS, "prompts/architect-long.md"), "architect"),
+		Writer:                withSimulationGuidance(mustRead(promptsFS, "prompts/writer.md"), "writer"),
+		Editor:                withSimulationGuidance(mustRead(promptsFS, "prompts/editor.md"), "editor"),
+		Judge:                 mustRead(promptsFS, "prompts/judge.md"),
+		ImportFoundation:      mustRead(promptsFS, "prompts/import-foundation.md"),
+		ImportAnalyzer:        mustRead(promptsFS, "prompts/import-chapter-analyzer.md"),
+		SimulationSource:      mustRead(promptsFS, "prompts/simulation-source.md"),
 		SimulationMerge:       mustRead(promptsFS, "prompts/simulation-merge.md"),
 		SimulationPersonaFuse: mustRead(promptsFS, "prompts/simulation-persona-fuse.md"),
 	}

@@ -6,7 +6,7 @@
 
 1. 风格层以人格画像为主导：`style`（narrative_voice / sentence_rhythm / prose_texture / perspective / mood）与 `lexicon` 优先取 persona_profile 的条目；base_profile 的同类条目仅在不与人格冲突时补充。
 2. 结构层以主画像为基底：`plot_design`、`hook_design`、`pacing_density`、`reader_engagement` 以 base_profile 为基础，融入 persona_profile 中明显的个人手法作为变奏。
-3. `style.do_not_copy` 取两者并集，一条都不能删。
+3. `style.do_not_copy` 取两者并集去重；条目超限时优先保留最关键的禁抄条目，不得整段丢弃。
 4. `role_guidance` 只需融合 writer 维度（其余角色不消费融合画像），coordinator/architect/editor 可留空数组。
 5. 每个数组去重、去空、不超过 12 条，保留最具操作性的条目。
 6. 只输出 JSON 对象本身，不要任何解释文字或代码围栏。
