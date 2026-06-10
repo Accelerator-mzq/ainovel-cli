@@ -324,3 +324,13 @@ func mergeStringSets(groups ...[]string) []string {
 	}
 	return out
 }
+
+// FusedPersonaProfile 是竞稿写手的融合画像缓存条目：
+// 主画像（BaseStamp）与人格画像（PersonaStamp）任一更新即失效重融合；
+// Fallback=true 表示融合 LLM 调用失败、暂用人格画像原样，下次启动重试（缓存视为无效）。
+type FusedPersonaProfile struct {
+	BaseStamp    string            `json:"base_stamp"`
+	PersonaStamp string            `json:"persona_stamp"`
+	Fallback     bool              `json:"fallback,omitempty"`
+	Profile      SimulationProfile `json:"profile"`
+}
