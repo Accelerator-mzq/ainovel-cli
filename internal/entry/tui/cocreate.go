@@ -325,6 +325,12 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 		return ""
 	}
 
+	// 确认模态打开期间整屏只渲染确认框——前置 early-return 避免每帧
+	// 白渲染整个共创视图再丢弃；quitPending 透传给模态自己显示退出提示。
+	if state.confirmPending {
+		return renderStartConfirmOverlay(width, height, quitPending)
+	}
+
 	boxW, boxH := coCreateModalSize(width, height)
 
 	// title / subtitle / hint 放在 modal 外（上方与下方居中），让 modal 内部
@@ -360,14 +366,15 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 		Render(body)
 
 	stack := lipgloss.JoinVertical(lipgloss.Center, title, subtitle, "", box, "", hintLine)
-	if state.confirmPending {
-		return renderStartConfirmOverlay(width, height)
-	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, stack)
 }
 
-// renderStartConfirmOverlay 开始意图确认模态：盖在共创视图之上居中显示。
-func renderStartConfirmOverlay(width, height int) string {
+// renderStartConfirmOverlay 开始意图确认模态：整屏替换共创视图
+// （与 renderAskUserModal 锁屏式模态惯例一致）。
+// quitPending 时在模态下方补一行退出提示——模态打开期间共创视图的
+// hintLine 不可见，Ctrl+C 第一次按下的反馈不能丢（措辞与 hintLine 一致）。
+func renderStartConfirmOverlay(width, height int, quitPending bool) string {
+	const boxW = 46
 	lines := []string{
 		"",
 		"检测到开始意图",
@@ -376,7 +383,17 @@ func renderStartConfirmOverlay(width, height int) string {
 		"[Enter] 确认开写 · [Esc] 返回继续共创",
 		"",
 	}
-	modal := renderPaddedModalFrame(46, len(lines)+4, "开始创作确认", "", lines)
+	// body 行数 = boxH-2（lines 已自带首尾空行），+2 与 command_palette 惯例一致。
+	modal := renderPaddedModalFrame(boxW, len(lines)+2, "开始创作确认", "", lines)
+	if quitPending {
+		hint := lipgloss.NewStyle().
+			Width(boxW).
+			AlignHorizontal(lipgloss.Center).
+			Foreground(lipgloss.Color("243")).
+			Bold(true).
+			Render("Press Ctrl+C again to exit")
+		modal = lipgloss.JoinVertical(lipgloss.Center, modal, hint)
+	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
