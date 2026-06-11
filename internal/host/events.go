@@ -184,7 +184,7 @@ type CoCreateReply struct {
 	Message     string
 	Prompt      string
 	Ready       bool
-	StartIntent bool     // 用户本轮明确要求开始创作（<start_intent> 标签）
+	StartIntent bool // 用户本轮明确要求开始创作（<start_intent> 标签）
 	Suggestions []string
 	Raw         string
 }

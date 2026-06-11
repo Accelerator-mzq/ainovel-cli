@@ -43,7 +43,7 @@ const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不�
 - 标签外不要添加任何说明、思考或代码围栏。
 - <draft> 内允许多行 Markdown，直接换行书写，不需要任何转义。
 - <ready> 只写 true 或 false。信息已足够开始创作时填 true。
-- <start_intent> 只写 true 或 false。仅当用户在本轮明确要求立即开始创作（如「开始吧」「可以了，开写」）时填 true；用户只是表达满意但没有要求开始、或是否定语境（「先别开始」）都必须填 false。填 true 时 <ready> 必须同时为 true。
+- <start_intent> 只写 true 或 false。仅当用户在本轮明确要求立即开始创作（如「开始吧」「可以了，开写」）时填 true；用户只是表达满意但没有要求开始、或是否定语境（「先别开始」）都必须填 false。填 true 时 <ready> 必须同时为 true。若用户明确要求开始但信息仍不足，以用户意愿为准：仍填 true，并把 <ready> 同步置 true。
 - <ready>true</ready> 时 <suggestions> 可以为空（保留空标签 <suggestions></suggestions> 即可）。`
 
 // CoCreateProgressKind 标识流式回调的内容类型。
@@ -146,7 +146,7 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 	// Channel fallback：思考型模型（R1/GLM-Z1/QwQ 等）偶发把完整答案写进
 	// reasoning_content 后没切回 final answer 通道，导致 raw 为空但 thinking 含
 	// 完整四段。实测见 meta/sessions/cocreate.jsonl —— 直接拿 thinking 当 raw 解析，
-	// 协议层已有降级处理（无 [REPLY] 标记时整段当 reply），救场后 UI 体验无差别。
+	// 协议层已有降级处理（无 <reply> 标签时整段当 reply），救场后 UI 体验无差别。
 	rawText := raw.String()
 	if strings.TrimSpace(rawText) == "" {
 		if t := strings.TrimSpace(thinking.String()); t != "" {
@@ -160,18 +160,18 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 // coCreateLogEntry 是写入 meta/sessions/cocreate.jsonl 的一行结构。
 // 字段命名贴近 jsonl 直查习惯（snake_case），方便 jq 过滤。
 type coCreateLogEntry struct {
-	Time               time.Time         `json:"time"`
-	DurationMS         int64             `json:"duration_ms"`
-	InputHistory       []CoCreateMessage `json:"input_history"`
-	RawResponse        string            `json:"raw_response"`
-	RawLen             int               `json:"raw_len"`
-	Thinking           string            `json:"thinking,omitempty"`
-	ParsedReply        string            `json:"parsed_reply"`
-	ParsedDraft        string            `json:"parsed_draft"`
-	ParsedReady        bool              `json:"parsed_ready"`
-	ParsedStartIntent  bool              `json:"parsed_start_intent"` // 用户本轮明确要求开始创作
-	ParsedSugs         []string          `json:"parsed_sugs,omitempty"`
-	Error              string            `json:"error,omitempty"`
+	Time              time.Time         `json:"time"`
+	DurationMS        int64             `json:"duration_ms"`
+	InputHistory      []CoCreateMessage `json:"input_history"`
+	RawResponse       string            `json:"raw_response"`
+	RawLen            int               `json:"raw_len"`
+	Thinking          string            `json:"thinking,omitempty"`
+	ParsedReply       string            `json:"parsed_reply"`
+	ParsedDraft       string            `json:"parsed_draft"`
+	ParsedReady       bool              `json:"parsed_ready"`
+	ParsedStartIntent bool              `json:"parsed_start_intent"` // 用户本轮明确要求开始创作
+	ParsedSugs        []string          `json:"parsed_sugs,omitempty"`
+	Error             string            `json:"error,omitempty"`
 }
 
 func errString(err error) string {
