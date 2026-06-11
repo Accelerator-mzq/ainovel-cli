@@ -622,3 +622,57 @@ func containsRecallSummary(items []domain.RecallItem, want string) bool {
 	}
 	return false
 }
+
+// TestNovelContext_UserSettingsInjected 验证 Architect 路径注入用户设定全文。
+func TestNovelContext_UserSettingsInjected(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Settings.SaveUserSettings("## 文件：境界.md\n\n练气→筑基"); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewContextTool(s, References{}, "default", rules.LoadOptions{})
+	raw, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user_settings 在 foundation envelope 下，断言值包含"练气→筑基"
+	if !strings.Contains(string(raw), "练气→筑基") {
+		t.Fatalf("architect 路径未注入 user_settings: %s", raw)
+	}
+}
+
+// TestTruncateUTF8 验证按字节截断不切碎多字节字符。
+func TestTruncateUTF8(t *testing.T) {
+	// "设" 是 3 字节：截断点落在字符中间应回退到字符边界
+	s := "设定文档"
+	if got := truncateUTF8(s, 4); got != "设" {
+		t.Fatalf("truncateUTF8(%q, 4) = %q, want 设", s, got)
+	}
+	if got := truncateUTF8(s, 6); got != "设定" {
+		t.Fatalf("truncateUTF8(%q, 6) = %q, want 设定", s, got)
+	}
+	// 上限大于长度时原样返回
+	if got := truncateUTF8(s, 100); got != s {
+		t.Fatalf("truncateUTF8 不应截断：%q", got)
+	}
+}
+
+// TestNovelContext_UserSettingsInjectCap 验证注入端字节兜底：超大设定截断并标注（I1 回归）。
+func TestNovelContext_UserSettingsInjectCap(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	big := strings.Repeat("设", 20000) // 60KB UTF-8，超 32KB 注入上限
+	if err := s.Settings.SaveUserSettings(big); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewContextTool(s, References{}, "default", rules.LoadOptions{})
+	raw, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "注入已截断") {
+		t.Fatal("超大设定注入应截断并标注")
+	}
+	// 截断后注入体量必须显著小于原文（32KB 上限 + 标注，留余量断言 40KB 内）
+	if strings.Contains(string(raw), strings.Repeat("设", 12000)) {
+		t.Fatal("注入未截断：仍包含超过 32KB 的连续原文")
+	}
+}

@@ -20,7 +20,7 @@ const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不�
 </reply>
 
 <draft>
-当前完整的创作指令草稿，使用 Markdown：直接从二级标题开始，例如 "## 主题"、"## 关键要素"、"## 待澄清信息"；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整草稿原样再写一次——不要省略、不要写"（保持上一轮）"之类的占位。
+当前完整的创作指令草稿，使用 Markdown：直接从二级标题开始，例如 "## 主题"、"## 关键要素"、"## 待澄清信息"；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整草稿原样再写一次——不要省略、不要写"（保持上一轮）"之类的占位。如果用户粘贴了大段设定/资料原文，草稿里**不要复述原文**，用一行"（详细设定见用户原文，已由系统保全）"指代即可——原文会由系统完整保留并交给创作引擎，草稿只需记录讨论得出的增量决策。
 </draft>
 
 <ready>false</ready>
@@ -106,7 +106,8 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 		})
 	}()
 
-	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(2048))
+	// MaxTokens 放宽至 4096：draft 全文重写协议下 2048 容易截断长设定，放宽一倍。
+	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(4096))
 	if err != nil {
 		return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", err)
 	}

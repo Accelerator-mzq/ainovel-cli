@@ -2,10 +2,23 @@ package tools
 
 import (
 	"slices"
+	"unicode/utf8"
 
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/rules"
 )
+
+// truncateUTF8 按字节上限截断字符串，但不切碎多字节 UTF-8 字符：
+// 截断点落在多字节字符中间时回退到该字符起始字节之前。
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
 
 type contextBuildState struct {
 	chapter         int
@@ -600,6 +613,18 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 		envelope.Foundation["foreshadow_ledger"] = foreshadow
 	} else {
 		warn("foreshadow_ledger", err)
+	}
+	// 用户外部设定文档：最高优先级的规划依据。不进 trimByBudget 的 trimOrder
+	//（永不裁剪），注入端字节兜底：user_settings 不可裁，必须自限体量，
+	// 否则会把 Architect 60KB 预算内的其他字段全部挤掉。全文仍在 user_settings.md。
+	const maxUserSettingsInjectBytes = 32 * 1024
+	if settings, err := t.store.Settings.LoadUserSettings(); err == nil && settings != "" {
+		if len(settings) > maxUserSettingsInjectBytes {
+			settings = truncateUTF8(settings, maxUserSettingsInjectBytes) + "\n\n（注入已截断，完整设定见 user_settings.md）"
+		}
+		envelope.Foundation["user_settings"] = settings
+	} else {
+		warn("user_settings", err)
 	}
 	envelope.Foundation["foundation_status"] = t.foundationStatus()
 }

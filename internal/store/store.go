@@ -27,6 +27,7 @@ type Store struct {
 	Usage       *UsageStore
 	Contest     *ContestStore
 	Simulation  *SimulationStore
+	Settings    *SettingsStore // 用户外部设定文档（settings/ 目录 + 共创原文）
 
 	crossMu sync.Mutex // 保护跨域原子操作
 }
@@ -52,6 +53,7 @@ func NewStore(dir string) *Store {
 		Usage:       NewUsageStore(newIO(dir)),
 		Contest:     NewContestStore(newIO(dir)),
 		Simulation:  NewSimulationStore(newIO(dir)),
+		Settings:    NewSettingsStore(newIO(dir)),
 	}
 }
 
