@@ -359,6 +359,8 @@ func (h *Host) Continue(text string) error {
 // 确认词 → 内存放行 + 落盘 PlanReviewed + Resume 进入写作，返回 true；
 // 其他文本 → 复位提示标记后作为干预注入并恢复（Coordinator 改大纲），
 // 处理完成后门禁会再次拦截暂停，循环直到用户确认。
+// 前置：仅在审阅拦截态（UISnapshot.PlanReviewPending=true）下调用；
+// 门禁未启用时不应路由到本函数。
 func (h *Host) HandleReviewInput(text string) (approved bool, err error) {
 	if IsPlanReviewConfirm(text) {
 		if h.planReview != nil {

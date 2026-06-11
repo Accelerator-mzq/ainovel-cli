@@ -518,6 +518,10 @@ func (m *Model) syncRuntimePlaceholder() {
 	if m.mode != modeRunning || m.cocreate != nil {
 		return
 	}
+	if m.snapshot.PlanReviewPending {
+		m.textarea.Placeholder = "大纲已生成（layered_outline.md）· 输入修改意见，或输入「开始」进入写作"
+		return
+	}
 	switch m.snapshot.RuntimeState {
 	case "completed":
 		m.textarea.Placeholder = "创作已完成"

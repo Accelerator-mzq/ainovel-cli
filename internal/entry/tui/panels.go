@@ -132,7 +132,12 @@ func renderStateContent(snap host.UISnapshot, contentW int) string {
 	}
 
 	var overview strings.Builder
-	overview.WriteString(renderField("运行态", snapshotRuntimeStateLabel(snap.RuntimeState)))
+	label := snapshotRuntimeStateLabel(snap.RuntimeState)
+	// 规划审阅拦截态：引擎已 Abort 暂停，但语义是“等用户审大纲”，不是普通暂停。
+	if snap.PlanReviewPending && snap.RuntimeState == "paused" {
+		label = "待审阅"
+	}
+	overview.WriteString(renderField("运行态", label))
 	overview.WriteString(renderField("阶段", snapshotPhaseLabel(snap.Phase)))
 	overview.WriteString(renderField("流程", snapshotFlowLabel(snap.Flow)))
 	if snap.Layered {

@@ -177,6 +177,19 @@ func listenCoCreateDone(state *cocreateState) tea.Cmd {
 	}
 }
 
+// reviewInputResultMsg 规划审阅输入处理结果。
+type reviewInputResultMsg struct {
+	approved bool
+	err      error
+}
+
+func reviewInputRuntime(rt *host.Host, text string) tea.Cmd {
+	return func() tea.Msg {
+		approved, err := rt.HandleReviewInput(text)
+		return reviewInputResultMsg{approved: approved, err: err}
+	}
+}
+
 func steerRuntime(rt *host.Host, text string) tea.Cmd {
 	return func() tea.Msg {
 		rt.Steer(text)
