@@ -49,3 +49,21 @@ func TestUserTranscript_NilSession(t *testing.T) {
 		t.Errorf("nil session 应返回空串，got %q", got)
 	}
 }
+
+func TestCoCreateSession_StartIntentLifecycle(t *testing.T) {
+	s := NewCoCreateSession("写一本仙侠")
+	s.ApplyReply(host.CoCreateReply{
+		Message: "好的", Prompt: "## 主题", Ready: true, StartIntent: true, Raw: "raw",
+	})
+	if !s.StartIntent() {
+		t.Fatal("ApplyReply 应透传 StartIntent")
+	}
+	s.AppendUser("再改一下主角名字")
+	if s.StartIntent() {
+		t.Fatal("用户再次发言后 StartIntent 应作废（同 suggestions）")
+	}
+	s.ApplyReply(host.CoCreateReply{Message: "好", Prompt: "## 主题", Ready: true, Raw: "raw"})
+	if s.StartIntent() {
+		t.Fatal("下一轮无意图应覆盖为 false")
+	}
+}

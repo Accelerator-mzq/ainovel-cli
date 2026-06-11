@@ -12,6 +12,7 @@ type CoCreateSession struct {
 	history        []host.CoCreateMessage
 	draftPrompt    string
 	ready          bool
+	startIntent    bool // 用户本轮明确要求开始创作；每轮覆盖，用户再次发言即作废
 	streamReply    string
 	streamThinking string
 	suggestions    []string
@@ -55,6 +56,8 @@ func (s *CoCreateSession) ApplyReply(reply host.CoCreateReply) {
 		s.draftPrompt = prompt
 	}
 	s.ready = reply.Ready
+	// start_intent 每轮覆盖（含覆盖为 false）：意图只对本轮回复有效。
+	s.startIntent = reply.StartIntent
 	// suggestions 直接覆盖（包括覆盖为空）：每轮的引导只对当下有意义。
 	s.suggestions = append(s.suggestions[:0], reply.Suggestions...)
 }
@@ -70,6 +73,8 @@ func (s *CoCreateSession) AppendUser(text string) {
 	// 用户已经决定下一句要说什么，suggestions 立即作废，避免 AI 还没回复时
 	// 旧建议挂在输入框上误导。
 	s.suggestions = nil
+	// start_intent 随用户发言作废：意图是针对上一轮 AI 回复的一次性信号。
+	s.startIntent = false
 	s.history = append(s.history, host.CoCreateMessage{Role: "user", Content: text})
 }
 
@@ -121,6 +126,15 @@ func (s *CoCreateSession) Ready() bool {
 		return false
 	}
 	return s.ready
+}
+
+// StartIntent 返回本轮 AI 回复是否携带"立即开始创作"意图。
+// nil receiver 安全；用户再次发言或下一轮回复（未带意图）均覆盖为 false。
+func (s *CoCreateSession) StartIntent() bool {
+	if s == nil {
+		return false
+	}
+	return s.startIntent
 }
 
 func (s *CoCreateSession) CanStart() bool {
