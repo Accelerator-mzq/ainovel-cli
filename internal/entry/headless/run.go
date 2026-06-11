@@ -1,6 +1,7 @@
 package headless
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -40,10 +41,18 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		stdin = os.Stdin
 	}
 
-	eng, err := host.New(cfg, bundle)
+	var eng *host.Host
+	// reviewNotify 由 guard goroutine 触发，eng 此时已赋值
+	reviewNotify := func() {
+		runPlanReviewLoop(eng, stdin, stderr)
+	}
+	created, err := host.New(cfg, bundle,
+		host.WithInteractive(false),
+		host.WithPlanReviewNotify(reviewNotify))
 	if err != nil {
 		return err
 	}
+	eng = created
 	eng.AskUser().SetHandler(newTerminalAskUser(stdin, stderr).handle)
 	cleanup := logger.SetupFile(eng.Dir(), "headless.log", false)
 	defer cleanup()
@@ -173,6 +182,37 @@ func writeEvent(w io.Writer, ev host.Event) {
 		ts = "--:--:--"
 	}
 	fmt.Fprintf(w, "[%s] [%s] %s\n", ts, ev.Category, ev.Summary)
+}
+
+// runPlanReviewLoop 在 plan_review=on 的 headless 运行中处理规划审阅：
+// 打印提示，读一行 stdin 喂 HandleReviewInput。修改意见注入后引擎恢复运行，
+// 下次拦截 notify 会再次触发本函数（guard.ResetPrompt 在 HandleReviewInput
+// 修改分支里完成）。EOF（无人值守管道）自动确认，避免卡死自动化。
+// 已知限制：与 ask_user 共享 stdin——审阅暂停期间引擎不运行，无并发争用。
+func runPlanReviewLoop(eng *host.Host, stdin io.Reader, out io.Writer) {
+	fmt.Fprintln(out, "\n[规划审阅] 大纲已生成（layered_outline.md）。输入修改意见，或输入「开始」进入写作：")
+	r := bufio.NewReader(stdin)
+	for {
+		line, err := r.ReadString('\n')
+		text := strings.TrimSpace(line)
+		if text != "" {
+			approved, herr := eng.HandleReviewInput(text)
+			if herr != nil {
+				fmt.Fprintf(out, "[规划审阅] 处理失败: %v\n", herr)
+			}
+			if approved {
+				fmt.Fprintln(out, "[规划审阅] 已确认，进入写作")
+			} else {
+				fmt.Fprintln(out, "[规划审阅] 修改意见已注入，调整完成后将再次暂停审阅")
+			}
+			return
+		}
+		if err != nil {
+			fmt.Fprintln(out, "[规划审阅] stdin 关闭，自动确认进入写作")
+			_, _ = eng.HandleReviewInput("开始")
+			return
+		}
+	}
 }
 
 func replayQueue(items []domain.RuntimeQueueItem, stdout, stderr io.Writer) (bool, error) {
