@@ -363,12 +363,21 @@ func (h *Host) Continue(text string) error {
 // 门禁未启用时不应路由到本函数。
 func (h *Host) HandleReviewInput(text string) (approved bool, err error) {
 	if IsPlanReviewConfirm(text) {
+		// USER 回显：确认词与修改意见（Continue 的 "[继续]"）对齐，事件流里留痕。
+		h.emitEvent(Event{Time: time.Now(), Category: "USER", Summary: "[确认大纲] " + strings.TrimSpace(text), Level: "info"})
 		if h.planReview != nil {
 			h.planReview.Approve()
 		}
 		if err := h.store.Progress.MarkPlanReviewed(); err != nil {
 			slog.Warn("PlanReviewed 落盘失败（本次已内存放行，重启后将再次询问）",
 				"module", "host", "err", err)
+		}
+		h.mu.Lock()
+		running := h.lifecycle == lifecycleRunning
+		h.mu.Unlock()
+		if running {
+			// 正在按修改意见调整大纲：门禁已放行，本轮处理完会自然进入写作，无需 Resume
+			return true, nil
 		}
 		_, rerr := h.Resume()
 		return true, rerr

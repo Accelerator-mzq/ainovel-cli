@@ -470,12 +470,15 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 	case reviewInputResultMsg:
-		// 审阅输入结果：确认放行/改大纲循环均由 Host 内部驱动，
-		// TUI 只接住错误；状态变化（恢复运行/再次拦截）走 snapshot 自然回流。
+		// 审阅输入结果：确认放行/改大纲循环均由 Host 内部驱动，TUI 接住错误后
+		// 立即拉一次快照（PlanReviewPending/RuntimeState 即时上屏，不等 3s tick）。
+		// done 监听不在此重挂：拦截 Abort 时 doneMsg case 已重挂 listenDone。
 		if msg.err != nil {
 			m.err = msg.err
+		} else {
+			m.err = nil // 成功则清旧错，对齐 continueResultMsg 行为
 		}
-		return m, nil, true
+		return m, fetchSnapshot(m.runtime), true
 	case reportLoadedMsg:
 		if m.report == nil || msg.reqID != m.report.reqID {
 			return m, nil, true
