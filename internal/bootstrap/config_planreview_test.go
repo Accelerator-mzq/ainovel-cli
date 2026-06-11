@@ -1,6 +1,11 @@
 package bootstrap
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/Accelerator-mzq/ainovel-cli/internal/errs"
+)
 
 func TestEffectivePlanReview(t *testing.T) {
 	cases := []struct {
@@ -27,8 +32,13 @@ func TestValidatePlanReview(t *testing.T) {
 			t.Fatalf("%q 应合法: %v", ok, err)
 		}
 	}
-	if err := validatePlanReview("yes"); err == nil {
+	err := validatePlanReview("yes")
+	if err == nil {
 		t.Fatal("非法值应报错")
+	}
+	// 固化契约：校验错误必须包裹 errs.ErrConfig 哨兵，保证 errors.Is 分类不漏
+	if !errors.Is(err, errs.ErrConfig) {
+		t.Fatalf("校验错误应包裹 errs.ErrConfig: %v", err)
 	}
 }
 

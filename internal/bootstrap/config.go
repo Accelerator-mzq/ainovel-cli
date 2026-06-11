@@ -227,7 +227,7 @@ func validatePlanReview(v string) error {
 	case "", PlanReviewAuto, PlanReviewOn, PlanReviewOff:
 		return nil
 	}
-	return fmt.Errorf("plan_review 取值必须是 auto/on/off，当前: %q", v)
+	return fmt.Errorf("plan_review 取值必须是 auto/on/off，当前: %q: %w", v, errs.ErrConfig)
 }
 
 // ValidateBase 校验基础配置。
