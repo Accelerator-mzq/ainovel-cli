@@ -551,3 +551,42 @@ func TestSaveFoundationOutlineOverwriteDuringPlanReview(t *testing.T) {
 		t.Fatal("写作已开始应拦截全量覆盖")
 	}
 }
+
+// TestSaveFoundationOutlineRejectsLayeredShapedContent 扁平 outline 收到
+// VolumeOutline 形状的 JSON（unknown 字段被静默丢弃，解码成 chapter=0/core_event 空
+// 的废条目）必须报错而不是污染 outline.json——冒烟实测 Coordinator 会把分层修改
+// 误指成 type=outline，工具层校验是 Architect 自纠的唯一信号。
+func TestSaveFoundationOutlineRejectsLayeredShapedContent(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// 规划审阅暂停期（守卫豁免窗口）——正是冒烟里被污染的场景
+	if err := s.Progress.Save(&domain.Progress{NovelName: "t", Phase: domain.PhaseWriting, Layered: true}); err != nil {
+		t.Fatalf("Save progress: %v", err)
+	}
+	tool := NewSaveFoundationTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"type": "outline", "scale": "long",
+		"content": []map[string]any{{
+			"index": 1, "title": "冒烟测试卷", "theme": "测试",
+			"arcs": []map[string]any{{"index": 1, "title": "弧", "goal": "目标"}},
+		}},
+	})
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("VolumeOutline 形状的 content 应被拒绝")
+	}
+
+	// 合法扁平条目仍应通过
+	good, _ := json.Marshal(map[string]any{
+		"type": "outline", "scale": "short",
+		"content": []map[string]any{
+			{"chapter": 1, "title": "第一章", "core_event": "开局", "hook": "钩子"},
+			{"chapter": 2, "title": "第二章", "core_event": "发展", "hook": "钩子"},
+		},
+	})
+	if _, err := tool.Execute(context.Background(), good); err != nil {
+		t.Fatalf("合法扁平大纲应通过: %v", err)
+	}
+}
