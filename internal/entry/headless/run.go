@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Accelerator-mzq/ainovel-cli/assets"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/bootstrap"
@@ -15,6 +16,7 @@ import (
 	"github.com/Accelerator-mzq/ainovel-cli/internal/host"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/logger"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/store"
+	"github.com/Accelerator-mzq/ainovel-cli/internal/utils"
 )
 
 type Options struct {
@@ -41,10 +43,21 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		stdin = os.Stdin
 	}
 
+	// 唯一共享的 stdin reader：bufio.Reader 的 fill() 会把管道里已有的字节一次性
+	// 读进私有缓冲，若每个消费方各建一只 reader，先读的那只会把后续行"超前读"进
+	// 自己的缓冲再随函数返回丢弃（批量管道输入"意见\n开始\n"时第二轮只剩 EOF）。
+	// 审阅提示与 ask_user 必须共用这一只 reader。
+	stdinReader := bufio.NewReader(stdin)
+
 	var eng *host.Host
+	// reviewActive：审阅暂停期间为 true。notify 同步置位先于读 stdin，
+	// consume 据此区分"审阅暂停的 Done"与"真正停机的 Done"（论证见 consume）。
+	var reviewActive atomic.Bool
 	// reviewNotify 由 guard goroutine 触发，eng 此时已赋值
 	reviewNotify := func() {
-		runPlanReviewLoop(eng, stdin, stderr)
+		reviewActive.Store(true)
+		defer reviewActive.Store(false)
+		handlePlanReviewPrompt(eng, stdinReader, stderr)
 	}
 	created, err := host.New(cfg, bundle,
 		host.WithInteractive(false),
@@ -53,7 +66,9 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		return err
 	}
 	eng = created
-	eng.AskUser().SetHandler(newTerminalAskUser(stdin, stderr).handle)
+	// newTerminalAskUser 内部 bufio.NewReader 对已是 *bufio.Reader 的输入原样复用
+	//（NewReaderSize 的同型短路），不会二次包裹，与审阅路径共享同一只缓冲。
+	eng.AskUser().SetHandler(newTerminalAskUser(stdinReader, stderr).handle)
 	cleanup := logger.SetupFile(eng.Dir(), "headless.log", false)
 	defer cleanup()
 	defer eng.Close()
@@ -93,13 +108,13 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
 		}
 		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
-		return consume(eng, stdout, stderr, roundHasContent)
+		return consume(eng, stdout, stderr, roundHasContent, &reviewActive)
 	}
 
-	return consume(eng, stdout, stderr, false)
+	return consume(eng, stdout, stderr, false, &reviewActive)
 }
 
-func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool) error {
+func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool, reviewActive *atomic.Bool) error {
 	for {
 		select {
 		case ev, ok := <-eng.Events():
@@ -130,6 +145,26 @@ func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool) err
 		case _, ok := <-eng.Done():
 			if !ok {
 				return nil
+			}
+			// done 是带缓冲 channel：每次 run 停机由 waitDone 非阻塞发一次信号，
+			// 仅 Close 时关闭（ok=false 走上面分支）。所以这里 continue 之后
+			// 下一轮 select 仍监听同一通道，能收到后续 run 的停机信号。
+			//
+			// 规划审阅门禁拦截时会 Abort 当前 run，waitDone 照常发 Done——
+			// 若据此直接退出，审阅还阻塞在 stdin 上进程就没了（TUI 对同一信号
+			// 是重挂 listenDone 活下去，headless 需要等价处理）。
+			// 竞态论证——"Done 到达时既不 active、又不 pending、又不 running"
+			// 只可能是真正的停机：
+			//   1. 审阅期间 reviewActive 必为 true（notify 同步置位先于读 stdin）；
+			//   2. notify goroutine 尚未跑起来的窗口期，PlanReviewPending 已为 true
+			//      （guard 拦截的前提就是 pending）；
+			//   3. 确认路径 HandleReviewInput 返回前 Resume 已把状态置为 running，
+			//      而 reviewActive 在其后才清零，修改意见路径同理（Continue 置 running）。
+			if reviewActive.Load() {
+				continue
+			}
+			if snap := eng.Snapshot(); snap.PlanReviewPending || snap.RuntimeState == "running" {
+				continue
 			}
 			return drainPending(eng, stdout, stderr, roundHasContent)
 		}
@@ -184,17 +219,22 @@ func writeEvent(w io.Writer, ev host.Event) {
 	fmt.Fprintf(w, "[%s] [%s] %s\n", ts, ev.Category, ev.Summary)
 }
 
-// runPlanReviewLoop 在 plan_review=on 的 headless 运行中处理规划审阅：
+// reviewInputHandler 收窄审阅函数对 Host 的依赖，便于测试注入 fake。
+type reviewInputHandler interface {
+	HandleReviewInput(string) (bool, error)
+}
+
+// handlePlanReviewPrompt 在 plan_review=on 的 headless 运行中处理一次规划审阅输入：
 // 打印提示，读一行 stdin 喂 HandleReviewInput。修改意见注入后引擎恢复运行，
 // 下次拦截 notify 会再次触发本函数（guard.ResetPrompt 在 HandleReviewInput
 // 修改分支里完成）。EOF（无人值守管道）自动确认，避免卡死自动化。
-// 已知限制：与 ask_user 共享 stdin——审阅暂停期间引擎不运行，无并发争用。
-func runPlanReviewLoop(eng *host.Host, stdin io.Reader, out io.Writer) {
+// in 必须是与 ask_user 共享的唯一 bufio.Reader：防止各自缓冲超前读互吞字节；
+// 审阅暂停期间引擎不运行，故与 ask_user 无并发争用。
+func handlePlanReviewPrompt(eng reviewInputHandler, in *bufio.Reader, out io.Writer) {
 	fmt.Fprintln(out, "\n[规划审阅] 大纲已生成（layered_outline.md）。输入修改意见，或输入「开始」进入写作：")
-	r := bufio.NewReader(stdin)
 	for {
-		line, err := r.ReadString('\n')
-		text := strings.TrimSpace(line)
+		line, err := in.ReadString('\n')
+		text := utils.CleanInputLine(line)
 		if text != "" {
 			approved, herr := eng.HandleReviewInput(text)
 			if herr != nil {
@@ -209,7 +249,9 @@ func runPlanReviewLoop(eng *host.Host, stdin io.Reader, out io.Writer) {
 		}
 		if err != nil {
 			fmt.Fprintln(out, "[规划审阅] stdin 关闭，自动确认进入写作")
-			_, _ = eng.HandleReviewInput("开始")
+			if _, herr := eng.HandleReviewInput("开始"); herr != nil {
+				fmt.Fprintf(out, "[规划审阅] 自动确认失败: %v\n", herr)
+			}
 			return
 		}
 	}
