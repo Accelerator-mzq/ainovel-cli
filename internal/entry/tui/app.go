@@ -14,7 +14,7 @@ import (
 // 2. 正式创作会话进入 host.Host；
 // 3. 未来若新增“续写已有小说”等共享模式，统一落到 internal/entry/startup。
 func Run(cfg bootstrap.Config, bundle assets.Bundle) error {
-	rt, err := host.New(cfg, bundle)
+	rt, err := host.New(cfg, bundle, host.WithInteractive(true))
 	if err != nil {
 		return err
 	}

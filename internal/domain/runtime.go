@@ -53,6 +53,8 @@ type Progress struct {
 	CurrentVolume int  `json:"current_volume,omitempty"`
 	CurrentArc    int  `json:"current_arc,omitempty"`
 	Layered       bool `json:"layered,omitempty"`
+	// 规划审阅门禁：用户已确认大纲（plan_review 功能，确认后置 true 永不回退）
+	PlanReviewed bool `json:"plan_reviewed,omitempty"`
 }
 
 // IsResumable 判断是否可以从断点恢复。
@@ -74,6 +76,13 @@ func (p *Progress) LatestCompleted() int {
 		}
 	}
 	return max
+}
+
+// PlanReviewPending 规划已完成但用户尚未确认大纲，且写作尚未实际开始。
+// 旧书兼容：已有任何章节进度（当前章/进行中/已完成）→ 永不 pending。
+func PlanReviewPending(p *Progress) bool {
+	return p != nil && p.Phase == PhaseWriting && !p.PlanReviewed &&
+		p.CurrentChapter == 0 && p.InProgressChapter == 0 && len(p.CompletedChapters) == 0
 }
 
 // ExtractNovelNameFromPremise 从 premise 第一行 `# 书名`（可带《》包裹）提取书名。

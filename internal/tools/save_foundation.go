@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Accelerator-mzq/ainovel-cli/internal/domain"
 	"github.com/Accelerator-mzq/ainovel-cli/internal/errs"
@@ -70,8 +71,10 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	result := map[string]any{"saved": true, "type": a.Type, "scale": a.Scale}
 
-	// 写作阶段禁止全量覆盖大纲，只允许增量操作（expand_arc / append_volume）
-	if (a.Type == "outline" || a.Type == "layered_outline") && t.isWriting() {
+	// 写作阶段禁止全量覆盖大纲，只允许增量操作（expand_arc / append_volume）。
+	// 例外：规划审阅暂停期（Phase 已翻 writing 但零章节、用户尚未确认大纲）——
+	// 审阅修改意见正需要 Architect 重写大纲，且此时无已写章节可被破坏。
+	if (a.Type == "outline" || a.Type == "layered_outline") && t.isWriting() && !t.isPlanReviewPending() {
 		return nil, fmt.Errorf(
 			"写作阶段禁止使用 %s 全量覆盖大纲。请使用 expand_arc 展开骨架弧，或 append_volume 追加新卷: %w", a.Type, errs.ErrToolPrecondition)
 	}
@@ -95,6 +98,9 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 	case "outline":
 		var entries []domain.OutlineEntry
 		if err := decode("outline", &entries); err != nil {
+			return nil, err
+		}
+		if err := validateFlatOutlineEntries(entries); err != nil {
 			return nil, err
 		}
 		if err := t.store.Outline.SaveOutline(entries); err != nil {
@@ -331,4 +337,27 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 func (t *SaveFoundationTool) isWriting() bool {
 	p, _ := t.store.Progress.Load()
 	return p != nil && p.Phase == domain.PhaseWriting
+}
+
+// isPlanReviewPending 规划审阅暂停期：写作未实际开始且大纲未获用户确认。
+func (t *SaveFoundationTool) isPlanReviewPending() bool {
+	p, _ := t.store.Progress.Load()
+	return domain.PlanReviewPending(p)
+}
+
+// validateFlatOutlineEntries 机械校验扁平大纲条目：章节号必须为正、标题与核心事件非空。
+// 防止 VolumeOutline 等错误形状的 JSON 被静默解码成废条目（unknown 字段丢弃后
+// chapter=0/core_event 空）污染 outline.json，并连带改坏 total_chapters。
+func validateFlatOutlineEntries(entries []domain.OutlineEntry) error {
+	if len(entries) == 0 {
+		return fmt.Errorf("outline 条目为空: %w", errs.ErrToolArgs)
+	}
+	for i, e := range entries {
+		if e.Chapter < 1 || strings.TrimSpace(e.Title) == "" || strings.TrimSpace(e.CoreEvent) == "" {
+			return fmt.Errorf(
+				"outline 第 %d 个条目缺少 chapter/title/core_event——疑似传入了分层结构，分层书目修改卷/弧/章请改用 type=\"layered_outline\" 全量重写: %w",
+				i+1, errs.ErrToolArgs)
+		}
+	}
+	return nil
 }

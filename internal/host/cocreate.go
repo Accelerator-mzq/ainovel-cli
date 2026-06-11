@@ -13,10 +13,10 @@ import (
 
 const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不是直接开始写小说，而是通过多轮简短对话帮助用户澄清创作需求，并持续整理出一段可直接交给创作引擎的中文创作指令。
 
-每一轮回复严格按以下 XML 格式输出，包含四个标签，依次出现，每个标签都必须有正确的开闭标签：
+每一轮回复严格按以下 XML 格式输出，包含五个标签，依次出现，每个标签都必须有正确的开闭标签：
 
 <reply>
-给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果信息已足够开始创作，告诉用户可以按 Ctrl+S 开始。
+给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果信息已足够开始创作，告诉用户可以按 Ctrl+S 或直接说「开始」。
 </reply>
 
 <draft>
@@ -24,6 +24,8 @@ const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不�
 </draft>
 
 <ready>false</ready>
+
+<start_intent>false</start_intent>
 
 <suggestions>
 1-3 条"用户接下来可能想说的话"，每行一条以 "- " 开头。这是用户卡壳时的引导，
@@ -36,11 +38,12 @@ const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不�
 </suggestions>
 
 输出规范：
-- 必须使用四个 XML 标签：<reply> / <draft> / <ready> / <suggestions>，每个都必须完整开闭。
+- 必须使用五个 XML 标签：<reply> / <draft> / <ready> / <start_intent> / <suggestions>，每个都必须完整开闭。
 - 标签名只能小写英文，不要改写成 <REPLY> / <REWRITE> / <回复> 等任何变体。
 - 标签外不要添加任何说明、思考或代码围栏。
 - <draft> 内允许多行 Markdown，直接换行书写，不需要任何转义。
 - <ready> 只写 true 或 false。信息已足够开始创作时填 true。
+- <start_intent> 只写 true 或 false。仅当用户在本轮明确要求立即开始创作（如「开始吧」「可以了，开写」）时填 true；用户只是表达满意但没有要求开始、或是否定语境（「先别开始」）都必须填 false。填 true 时 <ready> 必须同时为 true。若用户明确要求开始但信息仍不足，以用户意愿为准：仍填 true，并把 <ready> 同步置 true。
 - <ready>true</ready> 时 <suggestions> 可以为空（保留空标签 <suggestions></suggestions> 即可）。`
 
 // CoCreateProgressKind 标识流式回调的内容类型。
@@ -49,13 +52,14 @@ const (
 	CoCreateProgressReply    = "reply"
 )
 
-// 四段式 XML 标签输出。XML 风格比方括号 marker 更鲁棒——Claude/GPT 训练数据里
+// 五段式 XML 标签输出。XML 风格比方括号 marker 更鲁棒——Claude/GPT 训练数据里
 // 大量 <thinking>...</thinking> 这类格式，模型几乎不会把 <reply> 改写成 <REWRITE>
 // 或其他变体；闭合标签也让流式中段截断更精确（不依赖找下一个 marker 来断尾）。
 const (
 	tagReply       = "reply"
 	tagDraft       = "draft"
 	tagReady       = "ready"
+	tagStartIntent = "start_intent" // 用户本轮明确要求立即开始创作
 	tagSuggestions = "suggestions"
 )
 
@@ -92,17 +96,18 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 			return
 		}
 		_ = sessions.LogCoCreate(coCreateLogEntry{
-			Time:         time.Now(),
-			DurationMS:   time.Since(start).Milliseconds(),
-			InputHistory: history,
-			RawResponse:  raw.String(),
-			RawLen:       len([]rune(raw.String())),
-			Thinking:     thinking.String(),
-			ParsedReply:  reply.Message,
-			ParsedDraft:  reply.Prompt,
-			ParsedReady:  reply.Ready,
-			ParsedSugs:   reply.Suggestions,
-			Error:        errString(err),
+			Time:              time.Now(),
+			DurationMS:        time.Since(start).Milliseconds(),
+			InputHistory:      history,
+			RawResponse:       raw.String(),
+			RawLen:            len([]rune(raw.String())),
+			Thinking:          thinking.String(),
+			ParsedReply:       reply.Message,
+			ParsedDraft:       reply.Prompt,
+			ParsedReady:       reply.Ready,
+			ParsedStartIntent: reply.StartIntent, // 落盘 start_intent 解析结果
+			ParsedSugs:        reply.Suggestions,
+			Error:             errString(err),
 		})
 	}()
 
@@ -141,7 +146,7 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 	// Channel fallback：思考型模型（R1/GLM-Z1/QwQ 等）偶发把完整答案写进
 	// reasoning_content 后没切回 final answer 通道，导致 raw 为空但 thinking 含
 	// 完整四段。实测见 meta/sessions/cocreate.jsonl —— 直接拿 thinking 当 raw 解析，
-	// 协议层已有降级处理（无 [REPLY] 标记时整段当 reply），救场后 UI 体验无差别。
+	// 协议层已有降级处理（无 <reply> 标签时整段当 reply），救场后 UI 体验无差别。
 	rawText := raw.String()
 	if strings.TrimSpace(rawText) == "" {
 		if t := strings.TrimSpace(thinking.String()); t != "" {
@@ -155,17 +160,18 @@ func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *s
 // coCreateLogEntry 是写入 meta/sessions/cocreate.jsonl 的一行结构。
 // 字段命名贴近 jsonl 直查习惯（snake_case），方便 jq 过滤。
 type coCreateLogEntry struct {
-	Time         time.Time         `json:"time"`
-	DurationMS   int64             `json:"duration_ms"`
-	InputHistory []CoCreateMessage `json:"input_history"`
-	RawResponse  string            `json:"raw_response"`
-	RawLen       int               `json:"raw_len"`
-	Thinking     string            `json:"thinking,omitempty"`
-	ParsedReply  string            `json:"parsed_reply"`
-	ParsedDraft  string            `json:"parsed_draft"`
-	ParsedReady  bool              `json:"parsed_ready"`
-	ParsedSugs   []string          `json:"parsed_sugs,omitempty"`
-	Error        string            `json:"error,omitempty"`
+	Time              time.Time         `json:"time"`
+	DurationMS        int64             `json:"duration_ms"`
+	InputHistory      []CoCreateMessage `json:"input_history"`
+	RawResponse       string            `json:"raw_response"`
+	RawLen            int               `json:"raw_len"`
+	Thinking          string            `json:"thinking,omitempty"`
+	ParsedReply       string            `json:"parsed_reply"`
+	ParsedDraft       string            `json:"parsed_draft"`
+	ParsedReady       bool              `json:"parsed_ready"`
+	ParsedStartIntent bool              `json:"parsed_start_intent"` // 用户本轮明确要求开始创作
+	ParsedSugs        []string          `json:"parsed_sugs,omitempty"`
+	Error             string            `json:"error,omitempty"`
 }
 
 func errString(err error) string {
@@ -191,28 +197,32 @@ func parseCoCreateResponse(raw string) (CoCreateReply, error) {
 		return CoCreateReply{}, fmt.Errorf("cocreate empty response")
 	}
 
-	reply, draft, ready, suggestions := splitCoCreateMarkers(raw)
+	reply, draft, ready, startIntent, suggestions := splitCoCreateMarkers(raw)
 	if reply == "" {
-		// 模型没遵守 XML 协议：整段作为 reply。
+		// 模型没遵守 XML 协议：整段作为 reply，降级时 StartIntent 保持 false。
 		return CoCreateReply{Message: raw, Prompt: "", Ready: false, Raw: raw}, nil
 	}
 	return CoCreateReply{
 		Message:     reply,
 		Prompt:      draft,
 		Ready:       ready,
+		StartIntent: startIntent,
 		Suggestions: suggestions,
 		Raw:         raw,
 	}, nil
 }
 
-// splitCoCreateMarkers 按四个 XML 标签切分文本。
+// splitCoCreateMarkers 按五个 XML 标签切分文本。
 // 标签可能缺失（流式中段或模型遗漏），缺失部分对应字段为空 / false / nil。
 // 缺失闭标签时，extractTagContent 会取到字符串末尾，仍尽力解析。
-func splitCoCreateMarkers(s string) (reply, draft string, ready bool, suggestions []string) {
+func splitCoCreateMarkers(s string) (reply, draft string, ready, startIntent bool, suggestions []string) {
 	reply = extractTagContent(s, tagReply)
 	draft = extractTagContent(s, tagDraft)
 	readyStr := strings.ToLower(extractTagContent(s, tagReady))
 	ready = readyStr == "true" || readyStr == "yes"
+	// 解析 start_intent：用户明确要求开始创作时为 true
+	intentStr := strings.ToLower(extractTagContent(s, tagStartIntent))
+	startIntent = intentStr == "true" || intentStr == "yes"
 	suggestions = parseSuggestions(extractTagContent(s, tagSuggestions))
 	return
 }
@@ -233,7 +243,7 @@ func extractTagContent(s, tag string) string {
 			return strings.TrimSpace(rest[:cIdx])
 		}
 		// 有开无闭 → 切到下一个已知开标签前
-		for _, other := range []string{"<reply>", "<draft>", "<ready>", "<suggestions>"} {
+		for _, other := range []string{"<reply>", "<draft>", "<ready>", "<start_intent>", "<suggestions>"} {
 			if other == open {
 				continue
 			}
@@ -248,7 +258,7 @@ func extractTagContent(s, tag string) string {
 	if cIdx := strings.Index(s, closeTag); cIdx >= 0 {
 		prefix := s[:cIdx]
 		start := 0
-		for _, t := range []string{"</reply>", "</draft>", "</ready>", "</suggestions>"} {
+		for _, t := range []string{"</reply>", "</draft>", "</ready>", "</start_intent>", "</suggestions>"} {
 			if t == closeTag {
 				continue
 			}

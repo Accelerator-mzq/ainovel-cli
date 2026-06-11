@@ -491,3 +491,102 @@ func TestSaveFoundationCompleteBookRejectsWithPendingRewrites(t *testing.T) {
 		t.Fatalf("phase should not be Complete with PendingRewrites: %s", progress.Phase)
 	}
 }
+
+// TestSaveFoundationOutlineOverwriteDuringPlanReview 规划审阅暂停期（Phase=writing
+// 但零章节、用户尚未确认大纲）允许全量覆盖——审阅修改意见正需要 Architect 重写大纲，
+// 且此时无已写章节可被破坏；用户确认或写作实际开始后守卫恢复拦截。
+func TestSaveFoundationOutlineOverwriteDuringPlanReview(t *testing.T) {
+	newTool := func(t *testing.T, p *domain.Progress) *SaveFoundationTool {
+		t.Helper()
+		dir := t.TempDir()
+		s := store.NewStore(dir)
+		if err := s.Init(); err != nil {
+			t.Fatalf("Init: %v", err)
+		}
+		if err := s.Progress.Save(p); err != nil {
+			t.Fatalf("Save progress: %v", err)
+		}
+		return NewSaveFoundationTool(s)
+	}
+	overwrite := func(tool *SaveFoundationTool) error {
+		args, _ := json.Marshal(map[string]any{
+			"type":  "layered_outline",
+			"scale": "long",
+			"content": []map[string]any{{
+				"index": 1, "title": "冒烟测试卷", "theme": "测试",
+				"arcs": []map[string]any{{
+					"index": 1, "title": "弧1", "goal": "目标",
+					"chapters": []map[string]any{
+						{"chapter": 1, "title": "第一章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 2, "title": "第二章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 3, "title": "第三章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 4, "title": "第四章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 5, "title": "第五章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 6, "title": "第六章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 7, "title": "第七章", "core_event": "事件", "hook": "钩子"},
+						{"chapter": 8, "title": "第八章", "core_event": "事件", "hook": "钩子"},
+					},
+				}},
+			}},
+		})
+		_, err := tool.Execute(context.Background(), args)
+		return err
+	}
+
+	// 审阅暂停期：应放行
+	pending := newTool(t, &domain.Progress{NovelName: "t", Phase: domain.PhaseWriting})
+	if err := overwrite(pending); err != nil {
+		t.Fatalf("审阅暂停期应允许全量覆盖: %v", err)
+	}
+
+	// 用户已确认：应拦截
+	reviewed := newTool(t, &domain.Progress{NovelName: "t", Phase: domain.PhaseWriting, PlanReviewed: true})
+	if err := overwrite(reviewed); err == nil {
+		t.Fatal("确认后应拦截全量覆盖")
+	}
+
+	// 有章节进度：应拦截
+	started := newTool(t, &domain.Progress{NovelName: "t", Phase: domain.PhaseWriting, CompletedChapters: []int{1}})
+	if err := overwrite(started); err == nil {
+		t.Fatal("写作已开始应拦截全量覆盖")
+	}
+}
+
+// TestSaveFoundationOutlineRejectsLayeredShapedContent 扁平 outline 收到
+// VolumeOutline 形状的 JSON（unknown 字段被静默丢弃，解码成 chapter=0/core_event 空
+// 的废条目）必须报错而不是污染 outline.json——冒烟实测 Coordinator 会把分层修改
+// 误指成 type=outline，工具层校验是 Architect 自纠的唯一信号。
+func TestSaveFoundationOutlineRejectsLayeredShapedContent(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// 规划审阅暂停期（守卫豁免窗口）——正是冒烟里被污染的场景
+	if err := s.Progress.Save(&domain.Progress{NovelName: "t", Phase: domain.PhaseWriting, Layered: true}); err != nil {
+		t.Fatalf("Save progress: %v", err)
+	}
+	tool := NewSaveFoundationTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"type": "outline", "scale": "long",
+		"content": []map[string]any{{
+			"index": 1, "title": "冒烟测试卷", "theme": "测试",
+			"arcs": []map[string]any{{"index": 1, "title": "弧", "goal": "目标"}},
+		}},
+	})
+	if _, err := tool.Execute(context.Background(), args); err == nil {
+		t.Fatal("VolumeOutline 形状的 content 应被拒绝")
+	}
+
+	// 合法扁平条目仍应通过
+	good, _ := json.Marshal(map[string]any{
+		"type": "outline", "scale": "short",
+		"content": []map[string]any{
+			{"chapter": 1, "title": "第一章", "core_event": "开局", "hook": "钩子"},
+			{"chapter": 2, "title": "第二章", "core_event": "发展", "hook": "钩子"},
+		},
+	})
+	if _, err := tool.Execute(context.Background(), good); err != nil {
+		t.Fatalf("合法扁平大纲应通过: %v", err)
+	}
+}

@@ -308,6 +308,9 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 	case modeRunning:
 		// 不本地回显 USER 事件 —— Host.Continue/Steer 入口已 emit "USER" 事件，
 		// 走 events channel 回流到 TUI。架构 §2.3：观察层只观察，不产生事实。
+		if m.snapshot.PlanReviewPending {
+			return m, reviewInputRuntime(m.runtime, text)
+		}
 		if !m.snapshot.IsRunning {
 			return m, continueRuntime(m.runtime, text)
 		}
@@ -466,6 +469,16 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			m.textarea.Placeholder = "正在暂停创作..."
 		}
 		return m, nil, true
+	case reviewInputResultMsg:
+		// 审阅输入结果：确认放行/改大纲循环均由 Host 内部驱动，TUI 接住错误后
+		// 立即拉一次快照（PlanReviewPending/RuntimeState 即时上屏，不等 3s tick）。
+		// done 监听不在此重挂：拦截 Abort 时 doneMsg case 已重挂 listenDone。
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.err = nil // 成功则清旧错，对齐 continueResultMsg 行为
+		}
+		return m, fetchSnapshot(m.runtime), true
 	case reportLoadedMsg:
 		if m.report == nil || msg.reqID != m.report.reqID {
 			return m, nil, true

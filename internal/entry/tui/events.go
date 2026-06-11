@@ -177,6 +177,19 @@ func listenCoCreateDone(state *cocreateState) tea.Cmd {
 	}
 }
 
+// reviewInputResultMsg 规划审阅输入处理结果。
+// 是否放行不在 TUI 消费——状态变化走 snapshot 回流，故只携带错误。
+type reviewInputResultMsg struct {
+	err error
+}
+
+func reviewInputRuntime(rt *host.Host, text string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := rt.HandleReviewInput(text)
+		return reviewInputResultMsg{err: err}
+	}
+}
+
 func steerRuntime(rt *host.Host, text string) tea.Cmd {
 	return func() tea.Msg {
 		rt.Steer(text)

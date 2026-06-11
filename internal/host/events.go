@@ -55,6 +55,7 @@ type UISnapshot struct {
 	PendingRewrites    []int
 	RewriteReason      string
 	PendingSteer       string
+	PlanReviewPending  bool // 规划完成待用户审阅大纲（plan_review 门禁拦截中）
 	RecoveryLabel      string
 	IsRunning          bool
 	Agents             []AgentSnapshot
@@ -183,6 +184,7 @@ type CoCreateReply struct {
 	Message     string
 	Prompt      string
 	Ready       bool
+	StartIntent bool // 用户本轮明确要求开始创作（<start_intent> 标签）
 	Suggestions []string
 	Raw         string
 }

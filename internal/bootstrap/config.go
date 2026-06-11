@@ -133,6 +133,9 @@ type Config struct {
 
 	// 全书成本预算；MaxCostUSD<=0 视为未启用（完全向后兼容）。
 	Budget Budget `json:"budget,omitempty"`
+
+	// PlanReview 规划完成后是否暂停等待用户审阅大纲："auto"（TUI 开/headless 关，默认）、"on"、"off"
+	PlanReview string `json:"plan_review,omitempty"`
 }
 
 // WritingContest 多人格竞稿配置。
@@ -196,6 +199,35 @@ func (b Budget) WarnUSD() float64 {
 		r = 0.8
 	}
 	return b.MaxCostUSD * r
+}
+
+// PlanReview 取值枚举。
+const (
+	PlanReviewAuto = "auto"
+	PlanReviewOn   = "on"
+	PlanReviewOff  = "off"
+)
+
+// EffectivePlanReview 报告规划审阅门禁是否启用。
+// auto（默认/空值）：交互式入口（TUI）启用、headless 关闭。
+// interactive 由入口层装配 Host 时显式传入，不复用 startup.Request.Interactive。
+func (c *Config) EffectivePlanReview(interactive bool) bool {
+	switch c.PlanReview {
+	case PlanReviewOn:
+		return true
+	case PlanReviewOff:
+		return false
+	}
+	return interactive
+}
+
+// validatePlanReview 校验 plan_review 枚举。
+func validatePlanReview(v string) error {
+	switch v {
+	case "", PlanReviewAuto, PlanReviewOn, PlanReviewOff:
+		return nil
+	}
+	return fmt.Errorf("plan_review 取值必须是 auto/on/off，当前: %q: %w", v, errs.ErrConfig)
 }
 
 // ValidateBase 校验基础配置。
@@ -271,6 +303,10 @@ func (c *Config) ValidateBase() error {
 				return err
 			}
 		}
+	}
+
+	if err := validatePlanReview(c.PlanReview); err != nil {
+		return err
 	}
 
 	return nil
