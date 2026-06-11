@@ -162,6 +162,11 @@ func mergeConfig(base, overlay Config) Config {
 		base.Budget = overlay.Budget
 	}
 
+	// PlanReview: overlay 非空则覆盖 base。
+	if overlay.PlanReview != "" {
+		base.PlanReview = overlay.PlanReview
+	}
+
 	return base
 }
 
