@@ -660,6 +660,20 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	state := m.cocreate
 
+	// start_intent 确认模态打开期间，按键只归模态。
+	// 必须在下方 KeyEsc → exitCoCreate 之前拦截，否则模态 Esc 会误退出共创。
+	if state.confirmPending {
+		switch msg.Type {
+		case tea.KeyEnter:
+			state.confirmPending = false
+			return m.startCoCreation(state)
+		case tea.KeyEsc:
+			state.confirmPending = false
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// 键盘 ↑↓/PgUp/PgDn/Home/End 滚动；Tab 在左对话栏 ↔ 右创作指令栏间切换滚动焦点
 	// （默认左栏，用户回看主体）。欢迎页已关鼠标上报以保留原生复制，右栏溢出时靠 Tab
 	// 切焦点后用键盘滚。左栏：上滚关 follow，滚到底重开 follow（流式跟随）。
@@ -715,20 +729,7 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlS:
-		if state.awaiting {
-			return m, nil
-		}
-		if state.canStart() {
-			plan, err := state.buildPlan()
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-			state.awaiting = true
-			m.textarea.Blur()
-			return m, startRuntime(m.runtime, plan)
-		}
-		return m, nil
+		return m.startCoCreation(state)
 	case tea.KeyEnter:
 		// Alt+Enter → 主动换行，让 textarea.Update 接管（KeyMap.InsertNewline 已绑此键）
 		if msg.Alt {
@@ -793,6 +794,22 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.textarea, cmd = m.textarea.Update(msg)
 	m.refitTextareaHeight()
 	return m, cmd
+}
+
+// startCoCreation 以当前草稿进入正式创作——Ctrl+S 与开始意图确认模态共用，
+// 启动链路单一来源（buildPlan → startRuntime，含共创原文保全）。
+func (m Model) startCoCreation(state *cocreateState) (tea.Model, tea.Cmd) {
+	if state.awaiting || !state.canStart() {
+		return m, nil
+	}
+	plan, err := state.buildPlan()
+	if err != nil {
+		m.err = err
+		return m, nil
+	}
+	state.awaiting = true
+	m.textarea.Blur()
+	return m, startRuntime(m.runtime, plan)
 }
 
 // exitCoCreate 退出共创模式，取消进行中的 LLM 请求，恢复输入框状态。

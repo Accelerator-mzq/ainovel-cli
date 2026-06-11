@@ -52,7 +52,7 @@ func placeholderForCoCreate(state *cocreateState) string {
 	case state.awaiting:
 		return "AI 正在整理你的要求..."
 	case state.canStart():
-		return "继续补充，或按 Ctrl+S 开始创作"
+		return "✨ 信息已足够 · Ctrl+S 或对 AI 说「开始」即可进入创作"
 	default:
 		return "继续补充你的要求，Enter 发送给 AI"
 	}
@@ -77,7 +77,8 @@ type cocreateState struct {
 	convFollow bool // true: 流式新内容自动滚到底；用户上滚后置 false 停止跟随
 	// focusPrompt 决定 ↑↓/PgUp/PgDn/Home/End 滚哪一栏：false=左对话栏（默认），
 	// true=右创作指令栏。欢迎页已关鼠标上报（保留原生复制），右栏溢出靠 Tab 切焦点后键盘滚。
-	focusPrompt bool
+	focusPrompt    bool
+	confirmPending bool // start_intent 确认模态打开中（Enter 开写 / Esc 返回）
 }
 
 func newCoCreateState(initial string) *cocreateState {
@@ -103,6 +104,9 @@ func (s *cocreateState) appendUser(text string) {
 func (s *cocreateState) apply(reply host.CoCreateReply) {
 	s.awaiting = false
 	s.session.ApplyReply(reply)
+	// 用户明确说"开始"且草稿可用 → 弹确认模态；Esc 关闭后本轮不再弹
+	//（下一轮回复再带意图会重新置位）。
+	s.confirmPending = reply.StartIntent && s.session.CanStart()
 }
 
 func (s *cocreateState) applyDelta(kind, text string) {
@@ -356,7 +360,24 @@ func renderCoCreateModal(width, height int, state *cocreateState, errMsg, inputV
 		Render(body)
 
 	stack := lipgloss.JoinVertical(lipgloss.Center, title, subtitle, "", box, "", hintLine)
+	if state.confirmPending {
+		return renderStartConfirmOverlay(width, height)
+	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, stack)
+}
+
+// renderStartConfirmOverlay 开始意图确认模态：盖在共创视图之上居中显示。
+func renderStartConfirmOverlay(width, height int) string {
+	lines := []string{
+		"",
+		"检测到开始意图",
+		"即将以右侧草稿进入正式创作",
+		"",
+		"[Enter] 确认开写 · [Esc] 返回继续共创",
+		"",
+	}
+	modal := renderPaddedModalFrame(46, len(lines)+4, "开始创作确认", "", lines)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 // coCreateHint 根据状态生成简短键位提示，避免与 placeholder 重复语义。
