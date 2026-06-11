@@ -1,6 +1,7 @@
 package host
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -95,4 +96,14 @@ func (g *planReviewGuard) Approve() {
 	g.mu.Lock()
 	g.approved = true
 	g.mu.Unlock()
+}
+
+// 规划审阅确认词：TrimSpace 后精确匹配，避免"不要开始"之类误判。
+var planReviewConfirmWords = map[string]bool{
+	"开始": true, "确认": true, "开写": true, "开始写作": true,
+}
+
+// IsPlanReviewConfirm 报告文本是否为规划审阅确认词。
+func IsPlanReviewConfirm(text string) bool {
+	return planReviewConfirmWords[strings.TrimSpace(text)]
 }

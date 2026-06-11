@@ -55,6 +55,7 @@ type UISnapshot struct {
 	PendingRewrites    []int
 	RewriteReason      string
 	PendingSteer       string
+	PlanReviewPending  bool // 规划完成待用户审阅大纲（plan_review 门禁拦截中）
 	RecoveryLabel      string
 	IsRunning          bool
 	Agents             []AgentSnapshot

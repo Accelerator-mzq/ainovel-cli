@@ -44,6 +44,7 @@ type Host struct {
 	observer          *observer
 	router            *flow.Dispatcher
 	routerDetach      func()
+	planReview        *planReviewGuard // 规划审阅门禁；未启用（plan_review=off / headless auto）时为 nil
 	usage             *UsageTracker
 	usageCancel       context.CancelFunc // 停掉 autoSaveLoop 并触发最后一次 flush
 
@@ -65,8 +66,27 @@ const (
 	lifecycleCompleted lifecycle = "completed"
 )
 
+// Option 配置 Host 装配期行为。
+type Option func(*hostOptions)
+
+type hostOptions struct {
+	interactive      bool
+	planReviewNotify func()
+}
+
+// WithInteractive 声明宿主入口是否交互式（TUI true / headless false），
+// 决定 plan_review=auto 时规划审阅门禁是否启用。
+func WithInteractive(v bool) Option { return func(o *hostOptions) { o.interactive = v } }
+
+// WithPlanReviewNotify 注入规划审阅触发回调（headless 用它起 stdin 审阅循环）。
+func WithPlanReviewNotify(fn func()) Option { return func(o *hostOptions) { o.planReviewNotify = fn } }
+
 // New 创建 Host。
-func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
+func New(cfg bootstrap.Config, bundle assets.Bundle, opts ...Option) (*Host, error) {
+	var o hostOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	cfg.FillDefaults()
 	if err := cfg.ValidateBase(); err != nil {
 		return nil, err
@@ -147,14 +167,34 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 			})
 		}
 	}
-	// 预算门禁：累计成本接近上限告警，超限拒绝派发并暂停。
+	// 预算门禁 + 规划审阅门禁：组合后一次性挂上 Dispatcher（装配期只调一次）。
+	var budgetAllow, planAllow func() bool
 	if cfg.Budget.Enabled() {
 		guard := newBudgetGuard(cfg.Budget,
 			func() float64 { c, _, _, _, _ := usage.Totals(); return c },
 			h.emitEvent,
 			func() { h.Abort() },
 		)
-		h.router.SetGate(guard.Allow)
+		budgetAllow = guard.Allow
+	}
+	if cfg.EffectivePlanReview(o.interactive) {
+		guard := newPlanReviewGuard(
+			func() bool {
+				p, err := store.Progress.Load()
+				if err != nil {
+					return false // 读失败放行，与 store 读失败的宽松处理一致
+				}
+				return domain.PlanReviewPending(p)
+			},
+			h.emitEvent,
+			func() { h.Abort() },
+			o.planReviewNotify,
+		)
+		h.planReview = guard
+		planAllow = guard.Allow
+	}
+	if gate := composeGates(budgetAllow, planAllow); gate != nil {
+		h.router.SetGate(gate)
 	}
 	h.routerDetach = h.router.Attach()
 
@@ -313,6 +353,28 @@ func (h *Host) Continue(text string) error {
 	h.mu.Unlock()
 	go h.waitDone()
 	return nil
+}
+
+// HandleReviewInput 处理规划审阅暂停态下的用户输入。
+// 确认词 → 内存放行 + 落盘 PlanReviewed + Resume 进入写作，返回 true；
+// 其他文本 → 复位提示标记后作为干预注入并恢复（Coordinator 改大纲），
+// 处理完成后门禁会再次拦截暂停，循环直到用户确认。
+func (h *Host) HandleReviewInput(text string) (approved bool, err error) {
+	if IsPlanReviewConfirm(text) {
+		if h.planReview != nil {
+			h.planReview.Approve()
+		}
+		if err := h.store.Progress.MarkPlanReviewed(); err != nil {
+			slog.Warn("PlanReviewed 落盘失败（本次已内存放行，重启后将再次询问）",
+				"module", "host", "err", err)
+		}
+		_, rerr := h.Resume()
+		return true, rerr
+	}
+	if h.planReview != nil {
+		h.planReview.ResetPrompt()
+	}
+	return false, h.Continue(text)
 }
 
 // Steer 提交用户干预。
@@ -590,6 +652,7 @@ func (h *Host) Snapshot() UISnapshot {
 	if meta, _ := h.store.RunMeta.Load(); meta != nil {
 		snap.PendingSteer = meta.PendingSteer
 	}
+	snap.PlanReviewPending = h.planReview != nil && h.planReview.Pending()
 
 	snap.Agents = h.observer.agentSnapshots()
 	h.fillContextStatus(&snap)

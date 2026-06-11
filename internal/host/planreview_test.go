@@ -2,6 +2,7 @@ package host
 
 import (
 	"testing"
+	"time"
 )
 
 func TestComposeGates(t *testing.T) {
@@ -41,8 +42,16 @@ func TestPlanReviewGuard_BlockOnceResetApprove(t *testing.T) {
 	if g.Allow() {
 		t.Fatal("pending 应拒绝")
 	}
-	<-aborted
-	<-notified
+	select {
+	case <-aborted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("abort 未触发")
+	}
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notify 未触发")
+	}
 	if len(events) != 1 || events[0].Level != "info" {
 		t.Fatalf("首次拦截应恰好一条 info 提示: %+v", events)
 	}
@@ -71,9 +80,23 @@ func TestPlanReviewGuard_NilNotify(t *testing.T) {
 	// 不 panic 即通过
 }
 
+func TestIsPlanReviewConfirm(t *testing.T) {
+	for _, yes := range []string{"开始", "确认", "开写", "开始写作", "  开始  "} {
+		if !IsPlanReviewConfirm(yes) {
+			t.Fatalf("%q 应为确认词", yes)
+		}
+	}
+	for _, no := range []string{"", "开始吧", "把第三卷拆成两卷", "不要开始"} {
+		if IsPlanReviewConfirm(no) {
+			t.Fatalf("%q 不应为确认词（精确匹配）", no)
+		}
+	}
+}
+
 func TestPlanReviewGuard_NotPending(t *testing.T) {
+	// 回调可能在 go 起的非测试 goroutine 里执行，不能 t.Fatal（FailNow 仅限测试 goroutine）
 	g := newPlanReviewGuard(func() bool { return false },
-		func(Event) { t.Fatal("不应发事件") }, func() { t.Fatal("不应 abort") }, nil)
+		func(Event) { t.Error("不应发事件") }, func() { t.Error("不应 abort") }, nil)
 	if !g.Allow() {
 		t.Fatal("非 pending 应放行")
 	}

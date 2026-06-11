@@ -9,7 +9,7 @@ import (
 )
 
 // budgetGuard 在每次路由派发前检查累计成本（meta/usage.json 口径）是否超出预算。
-// 注入 flow.Dispatcher.SetGate，Allow 可能被事件 goroutine 并发调用，需自带锁。
+// 经 composeGates 与其他门禁组合后注入 flow.Dispatcher.SetGate，Allow 可能被事件 goroutine 并发调用，需自带锁。
 type budgetGuard struct {
 	maxUSD  float64
 	warnUSD float64
