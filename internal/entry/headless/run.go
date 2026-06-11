@@ -53,9 +53,14 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 	// reviewActive：审阅暂停期间为 true。notify 同步置位先于读 stdin，
 	// consume 据此区分"审阅暂停的 Done"与"真正停机的 Done"（论证见 consume）。
 	var reviewActive atomic.Bool
-	// reviewNotify 由 guard goroutine 触发，eng 此时已赋值
+	// reviewNotify 由 guard goroutine 触发（eng 此时已赋值），consume 的重触发
+	// 路径也会调它。CAS 防双读者：两条路径可能并发到达（abort 的 Done 先于
+	// guard 的 notify goroutine 跑起来的窗口），共享 bufio.Reader 不允许两个
+	// goroutine 同时 ReadString（数据竞争+互吞）；输掉 CAS 的一方直接返回。
 	reviewNotify := func() {
-		reviewActive.Store(true)
+		if !reviewActive.CompareAndSwap(false, true) {
+			return // 已有一个审阅循环在读 stdin
+		}
 		defer reviewActive.Store(false)
 		handlePlanReviewPrompt(eng, stdinReader, stderr)
 	}
@@ -108,13 +113,21 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
 		}
 		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
-		return consume(eng, stdout, stderr, roundHasContent, &reviewActive)
+		return consume(eng, stdout, stderr, roundHasContent, &reviewActive, reviewNotify)
 	}
 
-	return consume(eng, stdout, stderr, false, &reviewActive)
+	return consume(eng, stdout, stderr, false, &reviewActive, reviewNotify)
 }
 
-func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool, reviewActive *atomic.Bool) error {
+// shouldReprompt 判定 Done 信号到达时是否需要重触发审阅提示：
+// 审阅待决（pending）但既没人读 stdin（!reviewActive）、引擎也没在跑
+// （runtimeState != "running"）。三个条件缺一不可：active 时已有读者在等输入；
+// running 时引擎稍后还会停机或被门禁再次拦截；非 pending 则无审阅可言。
+func shouldReprompt(reviewActive, pending bool, runtimeState string) bool {
+	return !reviewActive && pending && runtimeState != "running"
+}
+
+func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool, reviewActive *atomic.Bool, reprompt func()) error {
 	for {
 		select {
 		case ev, ok := <-eng.Events():
@@ -162,10 +175,19 @@ func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool, rev
 			//      而 reviewActive 在其后才清零，修改意见路径同理（Continue 置 running）；
 			//      abort 先于 notify 串行落地（planreview.go）保证读到输入时已是
 			//      Paused，确认/干预路径必走 Resume/Inject，不会留下无人重启的暂停。
-			if reviewActive.Load() {
+			//
+			// 悬挂兜底：修改意见轮若以纯文本回复/子代理报错收尾，dispatcher 不再
+			// 触发派发 → 门禁不再拦截 → 不再 notify，但 waitDone 照发 Done。此时
+			// 审阅待决（pending）却没人读 stdin（!active）——裸 continue 会让用户
+			// 后续输入永远无人消费，进程永久挂起。重触发审阅提示再 continue
+			//（reprompt 即 reviewNotify，内部 CAS 防与 guard notify 形成双读者）。
+			active := reviewActive.Load()
+			snap := eng.Snapshot()
+			if shouldReprompt(active, snap.PlanReviewPending, snap.RuntimeState) {
+				go reprompt()
 				continue
 			}
-			if snap := eng.Snapshot(); snap.PlanReviewPending || snap.RuntimeState == "running" {
+			if active || snap.PlanReviewPending || snap.RuntimeState == "running" {
 				continue
 			}
 			return drainPending(eng, stdout, stderr, roundHasContent)
@@ -240,7 +262,12 @@ func handlePlanReviewPrompt(eng reviewInputHandler, in *bufio.Reader, out io.Wri
 		if text != "" {
 			approved, herr := eng.HandleReviewInput(text)
 			if herr != nil {
-				fmt.Fprintf(out, "[规划审阅] 处理失败: %v\n", herr)
+				// 处理失败（Continue/Inject/Resume 报错）时不能返回：报错分支没有
+				// 启动新 run，此后不会再有 Done 信号触发 consume 的重提示兜底，
+				// 返回即无人读 stdin，用户后续输入永远无人消费。留在循环里重试；
+				// 确认放行在 HandleReviewInput 内幂等，重输「开始」会重试 Resume。
+				fmt.Fprintf(out, "[规划审阅] 处理失败: %v，请重新输入：\n", herr)
+				continue
 			}
 			if approved {
 				fmt.Fprintln(out, "[规划审阅] 已确认，进入写作")
