@@ -159,7 +159,9 @@ func consume(eng *host.Host, stdout, stderr io.Writer, roundHasContent bool, rev
 			//   2. notify goroutine 尚未跑起来的窗口期，PlanReviewPending 已为 true
 			//      （guard 拦截的前提就是 pending）；
 			//   3. 确认路径 HandleReviewInput 返回前 Resume 已把状态置为 running，
-			//      而 reviewActive 在其后才清零，修改意见路径同理（Continue 置 running）。
+			//      而 reviewActive 在其后才清零，修改意见路径同理（Continue 置 running）；
+			//      abort 先于 notify 串行落地（planreview.go）保证读到输入时已是
+			//      Paused，确认/干预路径必走 Resume/Inject，不会留下无人重启的暂停。
 			if reviewActive.Load() {
 				continue
 			}

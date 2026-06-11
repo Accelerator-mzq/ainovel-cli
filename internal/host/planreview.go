@@ -74,11 +74,15 @@ func (g *planReviewGuard) Allow() bool {
 	if first {
 		g.emit(Event{Time: time.Now(), Category: "SYSTEM", Level: "info",
 			Summary: "规划完成·大纲待审阅：已暂停派发。请查看 layered_outline.md，输入修改意见，或输入「开始」进入写作"})
-		// 异步：Allow 在 Dispatcher 的事件回调里被调，同步 Abort 可能与 coordinator 内部锁重入
-		go g.abort()
-		if g.notify != nil {
-			go g.notify()
-		}
+		// 异步：Allow 在 Dispatcher 的事件回调里被调，同步 Abort 可能与 coordinator 内部锁重入。
+		// 串行化：notify（headless 读 stdin）必须看到 abort 已置 Paused，
+		// 否则确认/干预会走 running 分支跳过 Resume/Inject，留下无人重启的暂停。
+		go func() {
+			g.abort()
+			if g.notify != nil {
+				g.notify()
+			}
+		}()
 	}
 	return false
 }
