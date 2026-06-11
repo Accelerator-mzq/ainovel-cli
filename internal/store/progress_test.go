@@ -199,3 +199,17 @@ func TestClearPendingRewrites(t *testing.T) {
 		t.Errorf("flow should be writing, got %s", p.Flow)
 	}
 }
+
+func TestMarkPlanReviewed(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	_ = store.Progress.Init("test", 10)
+
+	if err := store.Progress.MarkPlanReviewed(); err != nil {
+		t.Fatalf("MarkPlanReviewed: %v", err)
+	}
+	p, _ := store.Progress.Load()
+	if !p.PlanReviewed {
+		t.Fatal("PlanReviewed 应已落盘为 true")
+	}
+}

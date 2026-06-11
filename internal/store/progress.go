@@ -248,6 +248,21 @@ func (s *ProgressStore) SetLayered(layered bool) error {
 	})
 }
 
+// MarkPlanReviewed 标记用户已确认大纲，规划审阅门禁放行。
+func (s *ProgressStore) MarkPlanReviewed() error {
+	return s.io.WithWriteLock(func() error {
+		p, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return nil
+		}
+		p.PlanReviewed = true
+		return s.saveUnlocked(p)
+	})
+}
+
 // SetFlow 更新当前流程状态。
 func (s *ProgressStore) SetFlow(flow domain.FlowState) error {
 	return s.io.WithWriteLock(func() error {
