@@ -70,8 +70,10 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 
 	result := map[string]any{"saved": true, "type": a.Type, "scale": a.Scale}
 
-	// 写作阶段禁止全量覆盖大纲，只允许增量操作（expand_arc / append_volume）
-	if (a.Type == "outline" || a.Type == "layered_outline") && t.isWriting() {
+	// 写作阶段禁止全量覆盖大纲，只允许增量操作（expand_arc / append_volume）。
+	// 例外：规划审阅暂停期（Phase 已翻 writing 但零章节、用户尚未确认大纲）——
+	// 审阅修改意见正需要 Architect 重写大纲，且此时无已写章节可被破坏。
+	if (a.Type == "outline" || a.Type == "layered_outline") && t.isWriting() && !t.isPlanReviewPending() {
 		return nil, fmt.Errorf(
 			"写作阶段禁止使用 %s 全量覆盖大纲。请使用 expand_arc 展开骨架弧，或 append_volume 追加新卷: %w", a.Type, errs.ErrToolPrecondition)
 	}
@@ -331,4 +333,10 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 func (t *SaveFoundationTool) isWriting() bool {
 	p, _ := t.store.Progress.Load()
 	return p != nil && p.Phase == domain.PhaseWriting
+}
+
+// isPlanReviewPending 规划审阅暂停期：写作未实际开始且大纲未获用户确认。
+func (t *SaveFoundationTool) isPlanReviewPending() bool {
+	p, _ := t.store.Progress.Load()
+	return domain.PlanReviewPending(p)
 }
