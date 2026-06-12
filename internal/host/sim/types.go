@@ -34,6 +34,7 @@ const (
 	StageAnalyze Stage = "analyze"
 	StageMerge   Stage = "merge"
 	StageImport  Stage = "import"
+	StageFetch   Stage = "fetch"
 	StageDone    Stage = "done"
 	StageError   Stage = "error"
 )
