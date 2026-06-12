@@ -9,13 +9,15 @@ import (
 )
 
 func TestValidateAuthorDirName(t *testing.T) {
-	valid := []string{"余华", "刘慈欣", "Stephen King", "天涯..客"}
+	// ".hidden" 前导点但非 ".."：实现只拒结尾点，前导点合法
+	valid := []string{"余华", "刘慈欣", "Stephen King", "天涯..客", ".hidden"}
 	for _, name := range valid {
 		if err := validateAuthorDirName(name); err != nil {
 			t.Errorf("validateAuthorDirName(%q) = %v, want nil", name, err)
 		}
 	}
-	invalid := []string{"", "  ", ".", "..", "a/b", `a\b`, "a?b", "a*b", `a"b`, "a<b", "尾点."}
+	// "CON"/"nul"/"com1" 为 Windows 保留设备名（大小写不敏感）；"CON.txt" 验证剥扩展名后仍保留；"a\x00b" 为控制字符
+	invalid := []string{"", "  ", ".", "..", "a/b", `a\b`, "a?b", "a*b", `a"b`, "a<b", "尾点.", "CON", "nul", "com1", "CON.txt", "a\x00b"}
 	for _, name := range invalid {
 		if err := validateAuthorDirName(name); err == nil {
 			t.Errorf("validateAuthorDirName(%q) = nil, want error", name)
@@ -29,6 +31,7 @@ func TestSanitizeTitleForFile(t *testing.T) {
 		{"", "untitled"},
 		{"   ", "untitled"},
 		{"结尾是点...", "结尾是点"}, // Windows 文件名不能以点结尾
+		{"<<<>>>", "untitled"},  // 全非法字符标题清洗后为空，退化为 untitled
 	}
 	for _, c := range cases {
 		if got := sanitizeTitleForFile(c.in); got != c.want {
@@ -125,5 +128,15 @@ func TestExtractArticle(t *testing.T) {
 	}
 	if !strings.Contains(text, "他在镇上住了三十年") {
 		t.Errorf("正文未提取到段落内容: %q", text[:min(120, len(text))])
+	}
+
+	// 无 <title> 标签时，标题应回退为页面 host
+	noTitleHTML := "<html><head></head><body><article>" + para + "</article></body></html>"
+	title2, _, err := extractArticle([]byte(noTitleHTML), "text/html; charset=utf-8", u)
+	if err != nil {
+		t.Fatalf("extractArticle（无 title）失败: %v", err)
+	}
+	if title2 != "example.com" {
+		t.Errorf("空 title 应回退 pageURL.Host，got %q", title2)
 	}
 }

@@ -29,8 +29,19 @@ const (
 // windowsForbidden 是 Windows 文件/目录名的非法字符集（路径分隔符含在内）。
 const windowsForbidden = `<>:"/\|?*`
 
+// windowsReservedNames 是 Windows 保留设备名集合（不区分大小写）。
+// 这些名字带"扩展名"也同样保留（如 CON.txt），校验时须剥掉首个点之后的部分再比对。
+var windowsReservedNames = func() map[string]bool {
+	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+	for i := 1; i <= 9; i++ {
+		m[fmt.Sprintf("COM%d", i)] = true
+		m[fmt.Sprintf("LPT%d", i)] = true
+	}
+	return m
+}()
+
 // validateAuthorDirName 校验作者名可安全用作 personas/ 子目录名：
-// 拒绝空名、"."/".."、路径分隔符、Windows 非法字符、控制字符、点结尾。
+// 拒绝空名、"."/".."、路径分隔符、Windows 非法字符、控制字符、点结尾、保留设备名。
 func validateAuthorDirName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -46,6 +57,14 @@ func validateAuthorDirName(name string) error {
 		if r < 0x20 || strings.ContainsRune(windowsForbidden, r) {
 			return fmt.Errorf("作者名含非法字符：%q", name)
 		}
+	}
+	// Windows 保留设备名检查：取首个点之前的部分（CON.txt 同样保留），大小写不敏感
+	base := name
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	if windowsReservedNames[strings.ToUpper(base)] {
+		return fmt.Errorf("作者名是 Windows 保留设备名：%q", name)
 	}
 	return nil
 }
@@ -139,9 +158,11 @@ func normalizeText(s string) string {
 // decodePlainText 解码 txt 直链内容：UTF-8 校验通过则直通，
 // 否则按 GB18030（GBK 超集）解码。无法识别的字节会变成 U+FFFD，由质检兜底。
 func decodePlainText(data []byte) (string, error) {
+	// 注意：极短的 GBK 文本有小概率偶然通过 UTF-8 校验（已知启发式局限），长文本几乎不可能误判
 	if utf8.Valid(data) {
 		return string(data), nil
 	}
+	// GB18030 解码遇到坏字节不报错、落 U+FFFD 交质检兜底；err 分支仅防框架内部错误，勿"修掉"
 	decoded, err := simplifiedchinese.GB18030.NewDecoder().Bytes(data)
 	if err != nil {
 		return "", fmt.Errorf("非 UTF-8 内容且 GB18030 解码失败: %w", err)
