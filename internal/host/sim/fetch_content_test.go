@@ -30,8 +30,8 @@ func TestSanitizeTitleForFile(t *testing.T) {
 		{`第1章：风雪夜<归人>?`, "第1章：风雪夜 归人"}, // 全角冒号合法，半角非法字符换空格后压缩
 		{"", "untitled"},
 		{"   ", "untitled"},
-		{"结尾是点...", "结尾是点"}, // Windows 文件名不能以点结尾
-		{"<<<>>>", "untitled"},  // 全非法字符标题清洗后为空，退化为 untitled
+		{"结尾是点...", "结尾是点"},    // Windows 文件名不能以点结尾
+		{"<<<>>>", "untitled"}, // 全非法字符标题清洗后为空，退化为 untitled
 	}
 	for _, c := range cases {
 		if got := sanitizeTitleForFile(c.in); got != c.want {

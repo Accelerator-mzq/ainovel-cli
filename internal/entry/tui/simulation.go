@@ -29,7 +29,7 @@ type simulationState struct {
 	cancel     context.CancelFunc
 	// doneHint 成功完成时的底部提示；为空用默认文案（画像生成场景）
 	doneHint string
-	viewport   viewport.Model
+	viewport viewport.Model
 }
 
 type simulationLine struct {
