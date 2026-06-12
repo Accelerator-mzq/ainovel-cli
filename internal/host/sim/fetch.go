@@ -114,6 +114,13 @@ func RunFetch(ctx context.Context, opts FetchOptions) (<-chan Event, error) {
 			emit(StageFetch, i+1, len(parsed), msg, nil)
 		}
 
+		// 终判：取消若落在最后一条 URL 的 fetchOne 执行中，错误走的是
+		// per-URL 软失败分支而非循环顶部检查，这里补判一次，
+		// 避免误报"抓取完成"或把"用户取消"误报成"全部 URL 抓取失败"。
+		if err := ctx.Err(); err != nil {
+			emit(StageError, len(parsed), len(parsed), "用户取消语料抓取", err)
+			return
+		}
 		if okCount == 0 {
 			emit(StageError, len(parsed), len(parsed), "全部 URL 抓取失败", fmt.Errorf("no corpus fetched"))
 			return
@@ -123,6 +130,15 @@ func RunFetch(ctx context.Context, opts FetchOptions) (<-chan Event, error) {
 			okCount, len(parsed), personasDirName, author), nil)
 	}()
 	return events, nil
+}
+
+// humanSize 把字节数格式化为人性化单位：≥1MB 显示 MB，否则显示 KB。
+// 生产默认上限 20MB 显示"20MB"而非"20480KB"；测试注入的小上限仍显示 KB。
+func humanSize(n int64) string {
+	if n >= 1<<20 {
+		return fmt.Sprintf("%dMB", n>>20)
+	}
+	return fmt.Sprintf("%dKB", n>>10)
 }
 
 // fetchOne 处理单条 URL：抓取 → 按 Content-Type 分流解码/提取 → 质检 → 落盘。
@@ -150,7 +166,7 @@ func fetchOne(ctx context.Context, client *http.Client, u *url.URL, destDir stri
 		return out
 	}
 	if int64(len(body)) > maxBody {
-		out.err = fmt.Errorf("响应超过 %dKB 上限", maxBody>>10)
+		out.err = fmt.Errorf("响应超过 %s 上限", humanSize(maxBody))
 		return out
 	}
 
@@ -170,7 +186,11 @@ func fetchOne(ctx context.Context, client *http.Client, u *url.URL, destDir stri
 			title = strings.TrimSuffix(path.Base(u.Path), path.Ext(u.Path))
 		}
 	default:
-		err = fmt.Errorf("不支持的内容类型 %q（仅支持 HTML 页面与 txt 文本）", mediaType)
+		if mediaType == "" {
+			err = fmt.Errorf("服务器未声明内容类型（仅支持 HTML 页面与 txt 文本）")
+		} else {
+			err = fmt.Errorf("不支持的内容类型 %q（仅支持 HTML 页面与 txt 文本）", mediaType)
+		}
 	}
 	if err != nil {
 		out.err = err

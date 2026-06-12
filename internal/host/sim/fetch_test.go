@@ -256,10 +256,48 @@ func TestRunFetchFollowsRedirect(t *testing.T) {
 	}
 }
 
+func TestRunFetchCancelDuringLastURL(t *testing.T) {
+	// 复现场景：取消发生在最后一条 URL 的 fetchOne 执行中——
+	// 错误走 per-URL 软失败分支（Err=nil），必须靠循环后的 ctx 终判
+	// 以 StageError"用户取消"收尾，而不是误报 done 或"全部 URL 抓取失败"。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel() // 请求进行中模拟用户取消
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(fixtureHTML("取消页")))
+	}))
+	defer srv.Close()
+
+	root := t.TempDir()
+	ch, err := RunFetch(ctx, FetchOptions{SourceDir: root, Author: "测试作者", URLs: []string{srv.URL}})
+	if err != nil {
+		t.Fatalf("RunFetch: %v", err)
+	}
+	var events []Event
+	for ev := range ch {
+		events = append(events, ev)
+	}
+	if len(events) == 0 {
+		t.Fatal("至少应收到取消前的首条进度事件")
+	}
+	// emit 在 ctx 已取消后 select 两分支均就绪、随机二选一，StageError 事件
+	// 可能被丢弃（包内既有模式，不改 emit）。稳定不变式是"绝不能以 done 收尾"；
+	// 若 StageError 事件送达，则进一步校验文案含"取消"。
+	last := lastEvent(events)
+	if last.Stage == StageDone {
+		t.Fatalf("取消后不应以 done 收尾：%+v", events)
+	}
+	if last.Stage == StageError && !strings.Contains(last.Message, "取消") {
+		t.Fatalf("取消收尾事件文案应含\"取消\"：%q", last.Message)
+	}
+}
+
 func TestRunFetchRejectsBadInput(t *testing.T) {
 	root := t.TempDir()
 	cases := []FetchOptions{
-		{SourceDir: root, Author: "../逃逸", URLs: []string{"https://example.com"}}, // 路径穿越
+		{SourceDir: root, Author: "../逃逸", URLs: []string{"https://example.com"}},  // 路径穿越
 		{SourceDir: root, Author: "正常", URLs: []string{"ftp://example.com/a.txt"}}, // 非 http(s)
 		{SourceDir: root, Author: "正常", URLs: nil},                                 // 无 URL
 		{SourceDir: "", Author: "正常", URLs: []string{"https://example.com"}},       // 无根目录
