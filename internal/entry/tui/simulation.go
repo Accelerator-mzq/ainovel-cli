@@ -27,6 +27,8 @@ type simulationState struct {
 	err        error
 	done       bool
 	cancel     context.CancelFunc
+	// doneHint 成功完成时的底部提示；为空用默认文案（画像生成场景）
+	doneHint string
 	viewport   viewport.Model
 }
 
@@ -145,7 +147,11 @@ func (s *simulationState) refresh(contentW int) {
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("Esc 关闭面板"))
 	default:
-		b.WriteString(okStyle.Render("仿写画像已就绪，后续 Agent 会从 novel_context 读取"))
+		hint := s.doneHint
+		if hint == "" {
+			hint = "仿写画像已就绪，后续 Agent 会从 novel_context 读取"
+		}
+		b.WriteString(okStyle.Render(hint))
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("Esc 关闭面板"))
 	}
@@ -234,4 +240,21 @@ func listenSimulationEvent(reqID int, ch <-chan sim.Event) tea.Cmd {
 		}
 		return simEventMsg{reqID: reqID, ev: ev, ch: ch}
 	}
+}
+
+func startFetchSim(rt *host.Host, reqID int, args []string, width, height int) (*simulationState, tea.Cmd, error) {
+	if len(args) < 2 {
+		return nil, nil, fmt.Errorf("用法：/fetchsim <作者名> <url> [url...]")
+	}
+	author, urls := args[0], args[1:]
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := rt.FetchSimulationCorpus(ctx, author, urls)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	state := newSimulationState(reqID, "抓取仿写语料",
+		fmt.Sprintf("作者「%s」· %d 条 URL", author, len(urls)), width, height, cancel)
+	state.doneHint = fmt.Sprintf("语料已落盘 simulate/personas/%s/，请检查质量后运行 /simulate 生成画像", author)
+	return state, listenSimulationEvent(reqID, ch), nil
 }
