@@ -417,9 +417,6 @@ output/{书名}/
 
 ## 8. FAQ 与排障
 
-**Q: reasoning / thinking 类模型（DeepSeek-R1 等）能用吗？**
-不能用于 coordinator/architect/writer/editor。多轮工具循环要求回传 `reasoning_content`，当前框架层（litellm/agentcore）未携带，第二轮起会报 HTTP 400。规避：在 provider/网关侧把模型路由到非 thinking 后端。详见 [known-issues.md](known-issues.md)。
-
 **Q: 怎么暂停？怎么继续？**
 运行中按 `Esc` 暂停（正在执行的任务自然结束）；`Ctrl+C` 连按两次退出程序。暂停/停机后在输入框输入任意指令即注入并恢复，或直接重启程序自动续写。
 
