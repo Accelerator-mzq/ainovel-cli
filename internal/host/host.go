@@ -979,6 +979,27 @@ func (h *Host) ImportSimulationProfile(ctx context.Context, path string) (<-chan
 	return sim.RunImport(ctx, h.store, path)
 }
 
+// FetchSimulationCorpus 从网络抓取作者语料，落盘 simulate/personas/<作者>/。
+// 只落语料文件不生成画像——用户检查质量后自行运行 /simulate。
+func (h *Host) FetchSimulationCorpus(ctx context.Context, author string, urls []string) (<-chan sim.Event, error) {
+	h.mu.Lock()
+	if h.lifecycle == lifecycleRunning {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("coordinator 运行中，请先暂停后再抓取语料")
+	}
+	h.mu.Unlock()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working dir: %w", err)
+	}
+	return sim.RunFetch(ctx, sim.FetchOptions{
+		SourceDir: filepath.Join(wd, "simulate"),
+		Author:    author,
+		URLs:      urls,
+	})
+}
+
 // Export 导出已完成章节为外部文件（当前仅支持 TXT）。
 //
 // 与 ImportFrom 不同：导出是只读操作（不动 Progress / Checkpoint），

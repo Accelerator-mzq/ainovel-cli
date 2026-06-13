@@ -292,6 +292,8 @@ output/novel/meta/simulation_profile.json
 
 `/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Coordinator、Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
 
+语料也可以直接从网上抓：`/fetchsim <作者名> <url> [url...]` 抓取静态网页（自动提取正文、处理 GBK/UTF-8）或 txt 直链，落盘到 `simulate/personas/<作者名>/`。不支持需 JS 渲染或登录的站点（起点、晋江等主站章节页）。抓完不会自动生成画像——请按摘要里的质量警告检查语料后再运行 `/simulate`。版权提示：仅抓取你有权使用的公开内容，URL 选择责任在用户。
+
 ## 导入
 
 在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 分层大纲 / 指南针，逐章落盘。原文作为第一卷落成可续写的连载，导入完成后会**自动接力续写**——Coordinator 在第一卷末做评审/摘要、追加新卷，从下一章继续。

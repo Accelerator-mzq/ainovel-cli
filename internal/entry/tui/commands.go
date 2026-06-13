@@ -163,6 +163,27 @@ func commandRegistryInstance() commandRegistry {
 			},
 		},
 		{
+			Name:        "fetchsim",
+			Group:       "writing",
+			Usage:       "/fetchsim <作者名> <url> [url...]",
+			Description: "抓取网页/txt 语料落盘 personas/<作者>/（不自动生成画像）",
+			NeedsIdle:   true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				m.simSeq++
+				state, listenCmd, err := startFetchSim(m.runtime, m.simSeq, args, m.width, m.height)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "语料抓取启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.simulator = state
+				m.textarea.Blur()
+				return m, listenCmd
+			},
+		},
+		{
 			Name:        "export",
 			Group:       "writing",
 			Usage:       "/export [path] [from=N] [to=M] [--overwrite]",
